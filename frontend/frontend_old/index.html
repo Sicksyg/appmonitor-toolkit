@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>App Monitor - Wails v2 (Vanilla)</title>
+    <link rel="stylesheet" href="style.css" />
+</head>
+
+<body>
+    <!-- container -->
+    <div class="app-container">
+        <!-- Top row with phone button and hamburger menu -->
+        <div class="top-row">
+            <!-- Top-left phone -->
+            <div class="phone-container">
+                <button id="phoneBtn" class="phone-btn" onclick="copyToClipboard()">
+                    <img src="./src/assets/images/mobile-icon.svg" alt="Phone" class="phone-icon" />
+                    <span id="phoneIndicator" class="phone-indicator offline" aria-hidden="true"></span>
+                    <div class="phone-info-menu">
+                        <strong class="phone-info-text">Phone Information</strong>
+                        <div class="phone-info-text">ID: <span id="menu-udid"></span></div>
+                        <div class="phone-info-text">Model: <span id="menu-model">-</span></div>
+                        <div class="phone-info-text">OS: <span id="menu-os">-</span></div>
+                        <div class="phone-info-text">Name: <span id="menu-name">-</span></div>
+                    </div>
+                </button>
+            </div>
+
+            <!-- Top-right toggle button with iOS and Android icons -->
+            <div class="toggle-container">
+                <p class="toggle-label">iOS </p>
+                <label class="switch">
+                    <input type="checkbox">
+                    <span class="slider round"></span>
+                </label>
+                <p class="toggle-label"> Android</p>
+            </div>
+        </div>
+
+        <!-- Large vertical title -->
+        <div class="title">AppMonitor</div>
+
+        <div class="search-container">
+            <!-- Search bar -->
+            <div class="search-bar">
+                <input type="search" class="search-input" id="search-input" placeholder="Search applications..."
+                    onkeypress="if(event.key === 'Enter') SearchWild()" />
+                <button class="search-button" onclick="SearchWild()">Search</button>
+            </div>
+
+            <!-- iTunes search results -->
+            <div id="search-results" class="results-container" aria-live="polite"></div>
+        </div>
+
+        <div class="spacer"></div>
+
+        <!-- Load ipa file or load applist -->
+        <div class="file-load-section">
+            <div class="button-container">
+                <button class="btn" onclick="LoadAppList()">Load App List </button>
+                <button class="btn" onclick="loadFromPhone()">Load App from Phone</button>
+            </div>
+        </div>
+
+
+        <!-- Start button -->
+        <div class="analysis-section">
+            <div class="analysis-block">
+                <button class="btn" id="startButton" onclick="StartAnalysis()">Start</button>
+                <div id="analysis-status" class="analysis-status"></div>
+                <div class="analysis-progress hidden" role="progressbar" aria-valuemin="0" aria-valuemax="100"
+                    aria-valuenow="0">
+                    <div id="analysis-progress-bar" class="analysis-progress-bar" style="width: 0%;"></div>
+                </div>
+            </div>
+        </div>
+
+
+        <div>
+            <footer class="footer">
+                <span>© 2025 AppMonitor - v1.0</span>
+            </footer>
+        </div>
+    </div>
+    <script src="./src/main.js" type="module"></script>
+</body>
+
+</html>
