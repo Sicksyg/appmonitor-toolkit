@@ -13,9 +13,9 @@
                 <RouterLink class="nav-link" to="/android"><span class="nav-pill android" />
                     <AppIcon name="android" :size="22" />Android
                 </RouterLink>
-                <RouterLink class="nav-link" to="/utilities"><span class="nav-pill utilities" />
+                <!-- <RouterLink class="nav-link" to="/utilities"><span class="nav-pill utilities" />
                     <AppIcon name="tools" :size="22" />Utilities
-                </RouterLink>
+                </RouterLink> -->
                 <RouterLink class="nav-link" to="/settings"><span class="nav-pill settings" />
                     <AppIcon name="settings" :size="22" />Settings
                 </RouterLink>

@@ -219,7 +219,7 @@ func (a *App) StartAnalysis() {
 		return
 	}
 
-	time.Sleep(time.Second * 4)
+	time.Sleep(time.Second * 2)
 
 	a.appinfo.Permissions = enrichedPermissions
 	a.appinfo.SDKs = sdks
@@ -251,7 +251,9 @@ func (a *App) StartAndroidAnalysis() {
 	a.emitStatus("fetch", "Fetching app data from Exodus API", 20)
 	a.androidMgr.GetAppDataFromExodus(a.appinfo.BundleID, a.settings.ExodusAPIKey.Key)
 
-	// analyze the downloaded apk file using Exodus / Dexdump
+	// analyze the downloaded apk file using exodus api
+	a.emitStatus("analyze", "Analyzing app with Exodus", 60)
+	a.androidMgr.GetAppDataFromExodus(a.appinfo.BundleID, a.settings.ExodusAPIKey.Key)
 
 	a.emitStatus("done", "Analysis complete", 100)
 	a.Log("Android analysis complete for: "+a.appinfo.BundleID, "App.StartAndroidAnalysis")

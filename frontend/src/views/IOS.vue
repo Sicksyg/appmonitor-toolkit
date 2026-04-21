@@ -35,15 +35,17 @@
             </div>
         </section>
 
-        <!-- Analysis Status and report open -->
+        <!-- Analysis Panel and report open -->
         <section class="glass-panel" v-if="analysisHasRun">
-            <h3>Analysis Status</h3>
+            <h3>Analysis</h3>
             <p class="status-line" v-if="statusMessage">{{ statusMessage }}</p>
             <div class="analysis-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100"
                 :aria-valuenow="analysisPercent">
                 <div class="analysis-progress-bar" :style="{ width: `${analysisPercent}%` }" />
             </div>
 
+            <p class="status-line" v-if="statusMessage === 'Analysis complete'">The analysis is complete. You can now
+                open the generated report.</p>
             <div class="action-row" v-if="statusMessage === 'Analysis complete'">
                 <button class="btn primary" type="button" @click="openReport">Open Report</button>
             </div>

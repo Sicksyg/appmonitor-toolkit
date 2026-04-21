@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/johnfercher/maroto/v2"
 	"github.com/johnfercher/maroto/v2/pkg/components/col"
+	"github.com/johnfercher/maroto/v2/pkg/components/image"
 	"github.com/johnfercher/maroto/v2/pkg/components/page"
 	"github.com/johnfercher/maroto/v2/pkg/components/row"
 	"github.com/johnfercher/maroto/v2/pkg/components/text"
@@ -29,6 +31,8 @@ var (
 	professionalBlue = props.Color{Red: 70, Green: 110, Blue: 160}  // Headers and accents
 	slateBlue        = props.Color{Red: 100, Green: 130, Blue: 170} // Secondary accents
 	charcoalDivider  = props.Color{Red: 80, Green: 80, Blue: 80}    // Dividers
+	cardBeige        = props.Color{Red: 208, Green: 178, Blue: 145} // Front-page stat card
+	panelOffWhite    = props.Color{Red: 246, Green: 243, Blue: 239} // Front-page content panel
 )
 
 // Manager handles PDF report generation
@@ -78,8 +82,62 @@ func wrapText(text string, maxCharsPerLine int) string {
 	return result.String()
 }
 
+// wrapTextLong wraps text and truncates it if it exceeds a maximum length, adding "..." at the end. Maybe change to lines in future if we want to preserve more of the text instead of just truncating at a character limit.
+func wrapTextLong(text string, maxCharsPerLine int, maxLength int) string {
+	if len(text) <= maxCharsPerLine {
+		return text
+	}
+
+	if maxLength > 0 {
+		runes := []rune(text)
+		if len(runes) > maxLength {
+			cut := maxLength
+
+			// Move cut back to previous whitespace so we do not split a word.
+			for cut > 0 && !unicode.IsSpace(runes[cut-1]) {
+				cut--
+			}
+
+			// Fallback: if no whitespace found, hard-cut at maxLength.
+			if cut == 0 {
+				cut = maxLength
+			}
+
+			text = strings.TrimSpace(string(runes[:cut])) + "..."
+		}
+	}
+
+	var result strings.Builder
+	words := strings.Fields(text)
+	var line string
+
+	for _, word := range words {
+		if len(line)+len(word)+1 > maxCharsPerLine {
+			if line != "" {
+				result.WriteString(line + "\n")
+				line = word
+			} else {
+				result.WriteString(word + "\n")
+				line = ""
+			}
+		} else {
+			if line == "" {
+				line = word
+			} else {
+				line += " " + word
+			}
+		}
+	}
+
+	if line != "" {
+		result.WriteString(line)
+	}
+
+	return result.String()
+}
+
 // MakeMarotoReport generates a professional PDF report using Maroto v2
-func (rm *Manager) MakeMarotoReport(applicationName, applicationBundleID, outPath string, sdkMap map[string][]string, permissionMap map[string]models.PermissionDetail) error {
+func (rm *Manager) MakeMarotoReport(applicationName, applicationBundleID, appStoreDescription string, outPath string, sdkMap map[string][]string, permissionMap map[string]models.PermissionDetail) error {
 	// Create config
 	cfg := config.NewBuilder().
 		WithDimensions(210, 297).
@@ -91,10 +149,14 @@ func (rm *Manager) MakeMarotoReport(applicationName, applicationBundleID, outPat
 	// Create maroto
 	mrt := maroto.New(cfg)
 
-	// Build document
-	rm.buildFrontPage(mrt, applicationName, applicationBundleID, len(sdkMap), len(permissionMap))
+	// Build documents
+
+	// Front page
+	rm.buildHeader(mrt, applicationName)
+	rm.buildFrontPage(mrt, applicationName, applicationBundleID, appStoreDescription, len(sdkMap), len(permissionMap))
 	mrt.AddPages(page.New())
 
+	// Details pages
 	rm.buildHeader(mrt, applicationName)
 	rm.buildInfo(mrt, applicationBundleID, len(sdkMap))
 	rm.buildSDKSection(mrt, sdkMap)
@@ -116,48 +178,67 @@ func (rm *Manager) MakeMarotoReport(applicationName, applicationBundleID, outPat
 	return nil
 }
 
-func (rm *Manager) buildFrontPage(m core.Maroto, applicationName, bundleID string, sdkCount, permissionCount int) {
-	//generatedAt := time.Now().Format("2006-01-02 15:04 MST")
+func (rm *Manager) buildFrontPage(m core.Maroto, applicationName, bundleID string, appStoreDescription string, sdkCount, permissionCount int) {
+	// Developer mod - Add border around every element for easier debugging
 
-	// Add title, icon and summary
+	icon := "./testicon.png" // Placeholder icon path - replace with actual app icon if available
+
+	// Icon left and text about the app on the right
 	m.AddRows(
 		row.New(40).Add(
-			col.New(12).Add(
-				text.New(fmt.Sprintf("AppMonitor Analysis Report: %s", applicationName), props.Text{
+			// First Column with icon
+			image.NewFromFileCol(3, icon, props.Rect{
+				Center:  true,
+				Percent: 80,
+			}),
+			// Second Column with appStoreDescription text
+			col.New(9).Add(
+				text.New(applicationName, props.Text{
+					Top:   8,
 					Size:  18,
 					Style: fontstyle.Bold,
-					Align: align.Center,
+					Color: &darkCharcoal,
+				}),
+				text.New(wrapTextLong(appStoreDescription, 60, 300), props.Text{
+					Top:   20,
+					Size:  10,
+					Color: &mediumGray,
+				}),
+			),
+		).WithStyle(&props.Cell{BackgroundColor: &panelOffWhite}),
+
+		row.New(5),
+		row.New(1).WithStyle(&props.Cell{BackgroundColor: &charcoalDivider}),
+		row.New(5),
+	)
+	// Two columns with stats - total sdks as int and then a list of the sdks, and then total permissions as int and a list of the permissions.
+	m.AddRows(
+		row.New(20).Add(
+			// SDK Column
+			col.New(6).Add(
+				text.New(fmt.Sprintf("Total SDKs: %d", sdkCount), props.Text{
+					Size:  14,
+					Style: fontstyle.Bold,
+					Color: &professionalBlue,
+				}),
+				text.New("SDKs Detected:", props.Text{
+					Size:  12,
+					Style: fontstyle.Bold,
+					Color: &mediumGray,
+					Top:   10,
+				}),
+				// List SDKs with bullet points and without classnames
+
+			),
+			// Permissions Column
+			col.New(6).Add(
+				text.New(fmt.Sprintf("Total Permissions: %d", permissionCount), props.Text{
+					Size:  14,
+					Style: fontstyle.Bold,
 					Color: &professionalBlue,
 				}),
 			),
-		),
-		row.New(10),
-		row.New(8).Add(
-			col.New(12).Add(
-				text.New(fmt.Sprintf("Bundle ID: %s", bundleID), props.Text{
-					Size:  12,
-					Align: align.Center,
-				}),
-			),
-		),
-		row.New(5),
-		row.New(8).Add(
-			col.New(12).Add(
-				text.New(fmt.Sprintf("Total SDKs Detected: %d", sdkCount), props.Text{
-					Size:  12,
-					Align: align.Center,
-				}),
-			),
-		),
-		row.New(5),
-		row.New(8).Add(
-			col.New(12).Add(
-				text.New(fmt.Sprintf("Total Permissions Detected: %d", permissionCount), props.Text{
-					Size:  12,
-					Align: align.Center,
-				}),
-			),
-		),
+		).WithStyle(&props.Cell{BackgroundColor: &cardBeige}),
 	)
 }
 

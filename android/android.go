@@ -137,15 +137,12 @@ func (m *Manager) GooglePlaySearch(searchTerm string) string {
 	return string(jsonBytes)
 }
 
-func (m *Manager) DownloadAndroidApp(bundleID string) {
+func (m *Manager) DownloadAndroidApp(bundleID string, email string, token string) {
 	// Download the apk using apkeep
 	m.logger(fmt.Sprintf("Downloading Android app with bundle ID: %s", bundleID), "Manager.DownloadAndroidApp")
 
 	/* apkeep -a md.point.news -d google-play -e 'EMAIL_HERE' -t 'TOKEN_HERE' . */
 
-	// ONLY FOR TESTING:
-	email := "<INSERT_EMAIL_HERE>"
-	token := "<INSERT_TOKEN_HERE>"
 	appkeepCmd := exec.Command("apkeep", "-a", bundleID, "-d", "google-play", "-e", email, "-t", token, "./output")
 	output, err := appkeepCmd.CombinedOutput()
 	if err != nil {
@@ -231,21 +228,33 @@ func (m *Manager) GetAppDataFromExodus(bundleID string, authToken string) {
 		m.logger(fmt.Sprintf("Error reading response body: %v", err), "Manager.GetAppDataFromExodus")
 		return
 	}
+
+	var items []json.RawMessage
+	if err := json.Unmarshal(body, &items); err != nil {
+		return
+	}
+	if len(items) == 0 {
+		return
+	}
+
+	// Only take the last item in the response, which should be the most recent analysis for the app
+	last := items[len(items)-1]
+	formattedJson, err := json.MarshalIndent(last, "", "  ")
+	if err != nil {
+		return
+	}
+
 	m.logger(fmt.Sprintf("App data for %s was successfully fetched from Exodus API", bundleID), "Manager.GetAppDataFromExodus")
 
-	// save to file
-	var filename string = fmt.Sprintf("./output/%s_data.json", bundleID)
+	// save to file in tmp folder with the name {bundleID}_data.json
+	filename := fmt.Sprintf("./tmp/%s_data.json", bundleID)
 
-	err = os.WriteFile(filename, body, 0644)
+	err = os.WriteFile(filename, formattedJson, 0644)
 	if err != nil {
 		m.logger(fmt.Sprintf("Error writing app data to file: %v", err), "Manager.GetAppDataFromExodus")
 		return
 	}
 	m.logger(fmt.Sprintf("App data for %s saved to %s", bundleID, filename), "Manager.GetAppDataFromExodus")
-}
 
-func (m *Manager) AnalyzeAndroidApp(filePath string) {
-	// Analyze the downloaded apk file using Exodus / Dexdump
-	m.logger(fmt.Sprintf("Analyzing Android app at: %s", filePath), "Manager.AnalyzeAndroidApp")
-	// Analysis logic would go here
+	//
 }
