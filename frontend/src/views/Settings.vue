@@ -30,10 +30,19 @@
         <section class="glass-panel">
             <header class="view-header">
                 <h3>Google Play Store Authentication</h3>
-                <p>Obtain Google Account cookie for Play Store access.</p>
+                <p>Configure Google Account credentials for Play Store access.</p>
             </header>
+            <div class="input-group">
+                <label for="google-email">Google Account Username (email)</label>
+                <input id="google-email" class="field" placeholder="username@example.com" type="text"
+                    v-model="settings.auth.GoogleEmail" />
+                <label for="google-password">Google Account Password</label>
+                <input id="google-password" class="field" placeholder="••••••••" type="password"
+                    v-model="settings.auth.GooglePassword" />
+            </div>
             <div class="action-row">
-                <button class="btn android" type="button">Open Website</button>
+                <button class="btn android" type="button" @click="save">Save</button>
+                <span v-if="saveStatus" class="save-status">{{ saveStatus }}</span>
             </div>
         </section>
 
@@ -63,10 +72,33 @@
             <div class="input-group">
                 <label for="exodus-api-key">Exodus API Key</label>
                 <input id="exodus-api-key" class="field" placeholder="EXODUS_API_KEY" type="text"
-                    v-model="settings.exodusAPIKey.Key" />
+                    v-model="settings.exodusApiKey.Key" />
             </div>
             <div class="action-row">
-                <button class="btn neutral" type="button" @click="setExodusApiKey">Save API Key</button>
+                <button class="btn neutral" type="button" @click="save">Save API Key</button>
+                <span v-if="saveStatus" class="save-status">{{ saveStatus }}</span>
+            </div>
+        </section>
+
+
+        <!-- Toggle AppStore options -->
+        <section class="glass-panel">
+            <header class="view-header">
+                <h3>App Store Options</h3>
+                <p>Configure options for App Store interactions.</p>
+            </header>
+            <div class="input-group">
+                <label>
+                    <input type="checkbox" v-model="settings.options.DownloadFromAppStore" />
+                    Download apps directly from App Store
+                </label>
+                <label>
+                    <input type="checkbox" v-model="settings.options.InstallOnDevice" />
+                    Install apps on connected device
+                </label>
+            </div>
+            <div class="action-row">
+                <button class="btn neutral" type="button" @click="save">Save Options</button>
             </div>
         </section>
 
@@ -92,7 +124,7 @@ const settings = ref({
     auth: { AppleEmail: '', ApplePassword: '' },
     options: { DownloadFromAppStore: true, InstallOnDevice: true },
     report: { SavePath: '' },
-    exodusAPIKey: { Key: '' }
+    exodusApiKey: { Key: '' }
 })
 const reportOutputPlaceholder = 'No directory selected yet'
 const saveStatus = ref('')
@@ -126,10 +158,6 @@ async function pickReportDir() {
     } catch (error) {
         console.error('Error selecting directory:', error)
     }
-}
-
-async function setExodusApiKey() {
-    // Implement functionality to save Exodus API key
 }
 
 async function openSettingsDir() {

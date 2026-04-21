@@ -68,7 +68,7 @@
 <script setup>
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
-import { SearchGooglePlay, SelectItem, StartAnalysis } from '../../wailsjs/go/main/App'
+import { SearchGooglePlay, SelectItem, StartAndroidAnalysis } from '../../wailsjs/go/main/App'
 import AppIcon from '../components/AppIcon.vue'
 
 const searchTerm = ref('')
@@ -124,7 +124,7 @@ async function handleSelectItem(item) {
 }
 
 function handleStartAnalysis() {
-    StartAnalysis().catch((error) => {
+    StartAndroidAnalysis().catch((error) => {
         console.error(error)
         statusMessage.value = 'Failed to start analysis.'
     })

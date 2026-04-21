@@ -1,10 +1,5 @@
 package android
 
-/*
-This package is used for Android-specific functionalities within the AppMonitor application.
-
-*/
-
 import (
 	"encoding/json"
 	"fmt"
@@ -49,37 +44,37 @@ func NewManager(logger func(message, function string)) *Manager {
 	}
 }
 
-func GrapCookies() {
-	fmt.Println("GrapCookies function called")
+func (m *Manager) GrapCookies() {
+	m.logger("GrapCookies function called", "Manager.GrapCookies")
 	// Android-specific cookie grabbing logic would go here
 	url := "https://accounts.google.com/v3/signin/identifier?flowName=EmbeddedSetupAndroid&continue=https://accounts.google.com/o/android/auth?lang%3Den%26cc%3DUS%26langCountry%3Den_US%26xoauth_display_name%3DAndroid%2BDevice%26tmpl%3Dnew_account%26source%3Dandroid%26return_user_id%3Dtrue&dsh=S1226023185:1769769569605796"
 	resp, err := http.Get(url)
 	if err != nil {
-		fmt.Println("Error making request:", err)
+		m.logger("Error making request: "+err.Error(), "Manager.GrapCookies")
 		return
 	}
 	defer resp.Body.Close()
 
 	for _, cookie := range resp.Cookies() {
-		fmt.Printf("Cookie: %s = %s\n", cookie.Name, cookie.Value)
+		m.logger(fmt.Sprintf("Cookie: %s = %s", cookie.Name, cookie.Value), "Manager.GrapCookies")
 	}
 }
 
-func GooglePlayDetails(bundleID string) StoreResult {
+func (m *Manager) GooglePlayDetails(bundleID string) StoreResult {
 	// Fetch details of the app with the given bundle ID from the Google Play Store
 	// Example URL: https://play.google.com/store/apps/details?id=dk.sundhed.minsundhed&hl=da
 
 	url := "https://play.google.com/store/apps/details?id=" + bundleID + "&hl=da"
 	resp, err := http.Get(url)
 	if err != nil {
-		fmt.Println("Error making request:", err)
+		m.logger(fmt.Sprintf("Error making request: %v", err), "Manager.GooglePlayDetails")
 		return StoreResult{}
 	}
 	defer resp.Body.Close()
 
 	doc, err := goquery.NewDocumentFromReader(resp.Body)
 	if err != nil {
-		fmt.Println("Error parsing HTML:", err)
+		m.logger(fmt.Sprintf("Error parsing HTML: %v", err), "Manager.GooglePlayDetails")
 		return StoreResult{}
 	}
 
@@ -93,7 +88,7 @@ func GooglePlayDetails(bundleID string) StoreResult {
 	return details
 }
 
-func (a *Manager) GooglePlaySearch(searchTerm string) string {
+func (m *Manager) GooglePlaySearch(searchTerm string) string {
 	// Search the Google Play Store for the given search term
 	// Example URL: https://play.google.com/store/search?q=sundhed&c=apps&hl=da
 
@@ -101,7 +96,7 @@ func (a *Manager) GooglePlaySearch(searchTerm string) string {
 
 	resp, err := http.Get(url)
 	if err != nil {
-		fmt.Println("Error making request:", err)
+		m.logger(fmt.Sprintf("Error making request: %v", err), "Manager.GooglePlaySearch")
 		return "{}"
 	}
 	defer resp.Body.Close()
@@ -109,7 +104,7 @@ func (a *Manager) GooglePlaySearch(searchTerm string) string {
 	// Parse HTML and extract app information
 	doc, err := goquery.NewDocumentFromReader(resp.Body)
 	if err != nil {
-		fmt.Println("Error parsing HTML:", err)
+		m.logger(fmt.Sprintf("Error parsing HTML: %v", err), "Manager.GooglePlaySearch")
 		return "{}"
 	}
 
@@ -124,7 +119,7 @@ func (a *Manager) GooglePlaySearch(searchTerm string) string {
 		// Extract bundle ID from the href and fetch details for each app
 		if exists {
 			bundleID := strings.Split(href, "id=")[1]
-			details := GooglePlayDetails(bundleID)
+			details := m.GooglePlayDetails(bundleID)
 			searchResults.Results = append(searchResults.Results, details)
 		}
 	})
@@ -133,18 +128,18 @@ func (a *Manager) GooglePlaySearch(searchTerm string) string {
 
 	jsonBytes, err := json.Marshal(searchResults)
 	if err != nil {
-		fmt.Println("Error encoding JSON:", err)
+		m.logger(fmt.Sprintf("Error encoding JSON: %v", err), "Manager.GooglePlaySearch")
 		return "{}"
 	}
 
-	fmt.Printf("Google Play search results for '%s': %s\n", searchTerm, string(jsonBytes))
+	m.logger(fmt.Sprintf("Google Play search results for '%s': %s", searchTerm, string(jsonBytes)), "Manager.GooglePlaySearch")
 
 	return string(jsonBytes)
 }
 
-func DownloadAndroidApp(bundleID string) {
+func (m *Manager) DownloadAndroidApp(bundleID string) {
 	// Download the apk using apkeep
-	fmt.Printf("Downloading Android app with bundle ID: %s\n", bundleID)
+	m.logger(fmt.Sprintf("Downloading Android app with bundle ID: %s", bundleID), "Manager.DownloadAndroidApp")
 
 	/* apkeep -a md.point.news -d google-play -e 'EMAIL_HERE' -t 'TOKEN_HERE' . */
 
@@ -154,25 +149,25 @@ func DownloadAndroidApp(bundleID string) {
 	appkeepCmd := exec.Command("apkeep", "-a", bundleID, "-d", "google-play", "-e", email, "-t", token, "./output")
 	output, err := appkeepCmd.CombinedOutput()
 	if err != nil {
-		fmt.Println("Error running apkeep:", err)
+		m.logger(fmt.Sprintf("Error running apkeep: %v", err), "Manager.DownloadAndroidApp")
 		return
 	}
-	fmt.Println("apkeep output:", output)
+	m.logger(fmt.Sprintf("apkeep output: %s", string(output)), "Manager.DownloadAndroidApp")
 }
 
-func GetSDKIdentifiersFromExodus() {
+func (m *Manager) GetSDKIdentifiersFromExodus(authToken string) {
 	// Fetch SDK data from the Exodus API
-	fmt.Println("Fetching SDK data from Exodus API")
+	m.logger("Fetching SDK data from Exodus API", "Manager.GetSDKIdentifiersFromExodus")
 	// API call logic would go here
 
 	url := "https://reports.exodus-privacy.eu.org/api/trackers"
 	headers := map[string]string{
-		"Authorization": "Token ", // <-- INSERT TOKEN HERE --
+		"Authorization": "Token " + authToken, // <-- INSERT TOKEN HERE --
 	}
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		fmt.Println("Error making request:", err)
+		m.logger(fmt.Sprintf("Error making request: %v", err), "Manager.GetSDKIdentifiersFromExodus")
 		return
 	}
 	for key, value := range headers {
@@ -182,7 +177,7 @@ func GetSDKIdentifiersFromExodus() {
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Println("Error making request:", err)
+		m.logger(fmt.Sprintf("Error making request: %v", err), "Manager.GetSDKIdentifiersFromExodus")
 		return
 	}
 	defer resp.Body.Close()
@@ -190,31 +185,31 @@ func GetSDKIdentifiersFromExodus() {
 	// parse response and save SDK data to a json file
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		fmt.Println("Error reading response body:", err)
+		m.logger(fmt.Sprintf("Error reading response body: %v", err), "Manager.GetSDKIdentifiersFromExodus")
 		return
 	}
 	err = os.WriteFile("all_sdks.json", body, 0644)
 	if err != nil {
-		fmt.Println("Error writing SDK data to file:", err)
+		m.logger(fmt.Sprintf("Error writing SDK data to file: %v", err), "Manager.GetSDKIdentifiersFromExodus")
 		return
 	}
-	fmt.Println("SDK data saved to all_sdks.json")
+	m.logger("SDK data saved to all_sdks.json", "Manager.GetSDKIdentifiersFromExodus")
 }
 
-func GetAppDataFromExodus(bundleID string) {
+func (m *Manager) GetAppDataFromExodus(bundleID string, authToken string) {
 	// Fetch app data from the Exodus API for the given app name
-	fmt.Printf("Fetching data for app: %s from Exodus API\n", bundleID)
+	m.logger(fmt.Sprintf("Fetching data for app: %s from Exodus API", bundleID), "Manager.GetAppDataFromExodus")
 	// API call logic would go here
 
 	url := "https://reports.exodus-privacy.eu.org/api/search/" + url.PathEscape(bundleID) + "/details"
 	headers := map[string]string{
-		"Authorization": "Token ", // <-- INSERT TOKEN HERE --
+		"Authorization": "Token " + authToken, // <-- INSERT TOKEN HERE --
 	}
 
 	req, err := http.NewRequest("GET", url, nil)
 
 	if err != nil {
-		fmt.Println("Error making request:", err)
+		m.logger(fmt.Sprintf("Error making request: %v", err), "Manager.GetAppDataFromExodus")
 		return
 	}
 
@@ -225,7 +220,7 @@ func GetAppDataFromExodus(bundleID string) {
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Println("Error making request:", err)
+		m.logger(fmt.Sprintf("Error making request: %v", err), "Manager.GetAppDataFromExodus")
 		return
 	}
 	defer resp.Body.Close()
@@ -233,24 +228,24 @@ func GetAppDataFromExodus(bundleID string) {
 	// parse response and print app data
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		fmt.Println("Error reading response body:", err)
+		m.logger(fmt.Sprintf("Error reading response body: %v", err), "Manager.GetAppDataFromExodus")
 		return
 	}
-	fmt.Printf("App data for %s was successfully fetched from Exodus API\n", bundleID)
+	m.logger(fmt.Sprintf("App data for %s was successfully fetched from Exodus API", bundleID), "Manager.GetAppDataFromExodus")
 
 	// save to file
 	var filename string = fmt.Sprintf("./output/%s_data.json", bundleID)
 
 	err = os.WriteFile(filename, body, 0644)
 	if err != nil {
-		fmt.Println("Error writing app data to file:", err)
+		m.logger(fmt.Sprintf("Error writing app data to file: %v", err), "Manager.GetAppDataFromExodus")
 		return
 	}
-	fmt.Printf("App data for %s saved to %s\n", bundleID, filename)
+	m.logger(fmt.Sprintf("App data for %s saved to %s", bundleID, filename), "Manager.GetAppDataFromExodus")
 }
 
-func AnalyzeAndroidApp(filePath string) {
+func (m *Manager) AnalyzeAndroidApp(filePath string) {
 	// Analyze the downloaded apk file using Exodus / Dexdump
-	fmt.Printf("Analyzing Android app at: %s\n", filePath)
+	m.logger(fmt.Sprintf("Analyzing Android app at: %s", filePath), "Manager.AnalyzeAndroidApp")
 	// Analysis logic would go here
 }

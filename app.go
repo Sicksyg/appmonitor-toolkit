@@ -111,8 +111,10 @@ func (a *App) SetupWorkspace() {
 	if _, err = os.Stat(a.settingsPath); os.IsNotExist(err) {
 		defaultSettings := models.Settings{
 			Auth: models.AuthSettings{
-				AppleEmail:    "your-email-here",
-				ApplePassword: "your-app-specific-password-here",
+				AppleEmail:     "your-email-here",
+				ApplePassword:  "your-app-specific-password-here",
+				GoogleEmail:    "your-google-email-here",
+				GooglePassword: "your-google-password-here",
 			},
 			Options: models.OptionsSettings{
 				DownloadFromAppStore: true,
@@ -123,6 +125,9 @@ func (a *App) SetupWorkspace() {
 			},
 			ExodusAPIKey: models.ExodusAPIKey{
 				Key: "your-exodus-api-key-here",
+			},
+			GoogleCookies: models.GoogleCookies{
+				Cookies: "your-google-cookies-here",
 			},
 		}
 		settingsBytes, err := json.MarshalIndent(defaultSettings, "", "  ")
@@ -155,6 +160,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.helpersMgr = helpers.NewManager(a.Log, ctx)
 	a.analysisMgr = analysis.NewManager(a.Log)
+	a.androidMgr = android.NewManager(a.Log)
 
 	// setup tmp directory for analysis results
 	a.SetupWorkspace()
@@ -190,7 +196,7 @@ func (a *App) DownloadAndInstall(udid string, bundleID string) {
 	a.helpersMgr.DownloadAndInstall(udid, bundleID, a.settings.Auth.AppleEmail, a.settings.Auth.ApplePassword)
 }
 
-// ------------------------- Main analysis flow ----------------------- //
+// ------------------------- Main iOS analysis flow ----------------------- //
 
 // Main function to start analysis
 func (a *App) StartAnalysis() {
@@ -234,6 +240,21 @@ func (a *App) StartAnalysis() {
 	a.appinfo.ResultsPath = reportPath
 	a.emitStatus("done", "Analysis complete", 100)
 	a.Log("Analysis complete! Report saved to: "+reportPath, "App.StartAnalysis")
+}
+
+// ------------------------- Main Android analysis flow ----------------------- //
+func (a *App) StartAndroidAnalysis() {
+	a.emitStatus("start", "Starting Android analysis", 0)
+	a.Log("Starting Android analysis for: "+a.appinfo.BundleID, "App.StartAndroidAnalysis")
+
+	// get app data from Exodus API
+	a.emitStatus("fetch", "Fetching app data from Exodus API", 20)
+	a.androidMgr.GetAppDataFromExodus(a.appinfo.BundleID, a.settings.ExodusAPIKey.Key)
+
+	// analyze the downloaded apk file using Exodus / Dexdump
+
+	a.emitStatus("done", "Analysis complete", 100)
+	a.Log("Android analysis complete for: "+a.appinfo.BundleID, "App.StartAndroidAnalysis")
 }
 
 // --------------------------------------------------------------- //
@@ -402,8 +423,13 @@ func (a *App) OpenSettingsDir() {
 	}
 }
 
-func (a *App) OpenFileInDefaultApp(filePath string) {
+func (a *App) OpenReportFileInDefaultApp() {
 	// This function opens a file in the default application based on the OS
+	filePath := a.appinfo.ResultsPath
+	if filePath == "" {
+		a.Log("No file path specified to open", "App.OpenFileInDefaultApp")
+		return
+	}
 	switch goruntime.GOOS {
 	case "darwin":
 		cmd := exec.Command("open", filePath)

@@ -12,15 +12,18 @@ type PermissionDetail struct {
 
 // Settings structs for app configuration persisted to disk.
 type Settings struct {
-	Auth         AuthSettings    `json:"auth"`
-	Options      OptionsSettings `json:"options"`
-	Report       ReportSettings  `json:"report"`
-	ExodusAPIKey ExodusAPIKey    `json:"exodusApiKey"`
+	Auth          AuthSettings    `json:"auth"`
+	Options       OptionsSettings `json:"options"`
+	Report        ReportSettings  `json:"report"`
+	ExodusAPIKey  ExodusAPIKey    `json:"exodusApiKey"`
+	GoogleCookies GoogleCookies   `json:"googleCookies"`
 }
 
 type AuthSettings struct {
-	AppleEmail    string `json:"AppleEmail"`
-	ApplePassword string `json:"ApplePassword"`
+	AppleEmail     string `json:"AppleEmail"`
+	ApplePassword  string `json:"ApplePassword"`
+	GoogleEmail    string `json:"GoogleEmail"`
+	GooglePassword string `json:"GooglePassword"`
 }
 
 type OptionsSettings struct {
@@ -34,4 +37,8 @@ type ReportSettings struct {
 
 type ExodusAPIKey struct {
 	Key string `json:"key"`
+}
+
+type GoogleCookies struct {
+	Cookies string `json:"cookies"`
 }

@@ -131,7 +131,7 @@
 <script setup>
 import { onBeforeUnmount, onMounted, ref, computed } from 'vue'
 import { EventsOn, EventsOff, ClipboardSetText } from '../../wailsjs/runtime/runtime'
-import { LoadAppList, LoadFromPhone, SearchWild, SelectItem, StartAnalysis, OpenFileInDefaultApp } from '../../wailsjs/go/main/App'
+import { LoadAppList, LoadFromPhone, SearchWild, SelectItem, StartAnalysis, OpenReportFileInDefaultApp } from '../../wailsjs/go/main/App'
 import AppIcon from '../components/AppIcon.vue'
 
 // --- State ---
@@ -285,15 +285,12 @@ function handleStartAnalysis() {
 // Opens the generated report in the default browser
 async function openReport() {
     try {
-        await OpenFileInDefaultApp('report')
+        await OpenReportFileInDefaultApp()
     } catch (error) {
         console.error('Failed to open report:', error)
         statusMessage.value = 'Failed to open report.'
     }
 }
-
-
-
 
 
 </script>
