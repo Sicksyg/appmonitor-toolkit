@@ -58,6 +58,7 @@ func (a *Manager) fetchItunesResults(url string) string {
 func (a *Manager) ItunesSearchBundle(bundleID string) string {
 	// This function searches iTunes for the given bundleID and returns the result
 	// Build iTunes Search API URL with the bundleID
+	// Example URL with instagram: https://itunes.apple.com/lookup?bundleId=com.burbn.instagram&country=dk
 	url := fmt.Sprintf("https://itunes.apple.com/lookup?bundleId=%s&country=dk", bundleID) // Should maybe change country code based on device info
 
 	return a.fetchItunesResults(url)

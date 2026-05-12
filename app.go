@@ -52,14 +52,20 @@ type App struct {
 
 // AppInfo struct to hold app information and installation details for the analysis
 type AppInfo struct {
-	Name          string
-	BundleID      string
-	InstallPath   string
-	UDID          string
-	InstalledApps []helpers.InstalledApp
-	ResultsPath   string
-	SDKs          map[string][]string
-	Permissions   map[string]models.PermissionDetail
+	Name             string
+	BundleID         string
+	InstallPath      string
+	UDID             string
+	ArtworkUrl       string
+	SellerName       string
+	ArtistViewUrl    string
+	Description      string
+	AppStoreURL      string
+	AppStoreIconPath string
+	InstalledApps    []helpers.InstalledApp
+	ResultsPath      string
+	SDKs             map[string][]string
+	Permissions      map[string]models.PermissionDetail
 }
 
 // AnalysisStatus struct to hold analysis status
@@ -231,7 +237,7 @@ func (a *App) StartAnalysis() {
 
 	a.emitStatus("report", "Generating report", 85)
 	reportPath := filepath.Join("tmp", fmt.Sprintf("%s_report.pdf", a.appinfo.BundleID))
-	if err := a.reportMgr.MakeMarotoReport(a.appinfo.Name, a.appinfo.BundleID, reportPath, a.appinfo.SDKs, a.appinfo.Permissions); err != nil {
+	if err := a.reportMgr.MakeMarotoReport(a.appinfo.Name, a.appinfo.BundleID, a.appinfo.Description, a.appinfo.AppStoreIcon, a.appinfo.AppStoreURL, reportPath, a.appinfo.SDKs, a.appinfo.Permissions); err != nil {
 		a.emitStatus("error", "Report generation failed: "+err.Error(), 100)
 		a.Log("Error generating PDF report: "+err.Error(), "App.StartAnalysis")
 		return
@@ -304,11 +310,19 @@ func (a *App) SearchGooglePlay(term string) string {
 	return a.androidMgr.GooglePlaySearch(term)
 }
 
-func (a *App) SelectItem(trackName string, trackId int, bundleId string) {
+func (a *App) SelectItem(trackName string, trackId int, bundleId string, artworkUrl string, sellerName string, artistViewUrl string, description string) {
 	a.Log(fmt.Sprintf("Selected item - trackName: %s, trackId: %d, bundleId: %s", trackName, trackId, bundleId), "App.SelectItem")
 	// set the AppStruct to the selected item
 	a.appinfo.Name = trackName
 	a.appinfo.BundleID = bundleId
+	a.appinfo.ArtworkUrl = artworkUrl
+	a.appinfo.SellerName = sellerName
+	a.appinfo.ArtistViewUrl = artistViewUrl
+	a.appinfo.Description = description
+
+	a.helpersMgr.DownloadAndSaveAppIcon(artworkUrl, bundleId)
+
+	a.Log(fmt.Sprintf("App info updated - Name: %s, BundleID: %s, ArtworkUrl: %s, SellerName: %s, ArtistViewUrl: %s, Description: %s", a.appinfo.Name, a.appinfo.BundleID, a.appinfo.ArtworkUrl, a.appinfo.SellerName, a.appinfo.ArtistViewUrl, a.appinfo.Description), "App.SelectItem")
 }
 
 // OpenFile opens a file dialog

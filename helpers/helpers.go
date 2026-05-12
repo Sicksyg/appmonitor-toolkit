@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -226,4 +228,27 @@ func (m *Manager) DownloadAndInstall(udid, bundleID string, email, password stri
 	m.DownloadApp(bundleID, email, password)
 	installPath := "tmp/" + bundleID + ".ipa"
 	m.InstallApp(udid, installPath)
+}
+
+func (m *Manager) DownloadAndSaveAppIcon(url string, bundleID string) (string, error) {
+	// Download the app icon from the provided URL and save it to a temporary location
+	resp, err := http.Get(url)
+	if err != nil {
+		return "", fmt.Errorf("failed to download app icon: %v", err)
+	}
+	defer resp.Body.Close()
+
+	iconPath := fmt.Sprintf("tmp/%s_icon.png", bundleID)
+	outFile, err := os.Create(iconPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to create icon file: %v", err)
+	}
+	defer outFile.Close()
+
+	_, err = io.Copy(outFile, resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to save app icon: %v", err)
+	}
+
+	return iconPath, nil
 }

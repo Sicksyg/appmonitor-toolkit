@@ -49,6 +49,14 @@ func TestMakeMarotoReport_WithMockData_WritesPDF(t *testing.T) {
 			"ADJActivityHandler",
 			"ADJSessionParameters",
 		},
+		"Facebook SDK": {
+			"FBSDKCoreKit",
+			"FBSDKLoginKit",
+		},
+		"Google Maps SDK": {
+			"GMSServices",
+			"GMSMapView",
+		},
 	}
 
 	permissionMap := map[string]models.PermissionDetail{
@@ -65,6 +73,20 @@ func TestMakeMarotoReport_WithMockData_WritesPDF(t *testing.T) {
 			DeveloperDescription: "Used to provide nearby content and localization.",
 			Category:             "Tracking",
 			PlistKey:             "NSLocationWhenInUseUsageDescription",
+		},
+		"NSPhotoLibraryUsageDescription": {
+			CommonName:           "Photo Library",
+			AppleDescription:     "Accesses photo library for media selection.",
+			DeveloperDescription: "Used for profile photo and document uploads.",
+			Category:             "Sensitive",
+			PlistKey:             "NSPhotoLibraryUsageDescription",
+		},
+		"NSMicrophoneUsageDescription": {
+			CommonName:           "Microphone",
+			AppleDescription:     "Accesses microphone for audio capture.",
+			DeveloperDescription: "Used for voice messages and video recording.",
+			Category:             "Sensitive",
+			PlistKey:             "NSMicrophoneUsageDescription",
 		},
 	}
 

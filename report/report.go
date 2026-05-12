@@ -9,6 +9,7 @@ import (
 	"github.com/johnfercher/maroto/v2"
 	"github.com/johnfercher/maroto/v2/pkg/components/col"
 	"github.com/johnfercher/maroto/v2/pkg/components/image"
+	"github.com/johnfercher/maroto/v2/pkg/components/list"
 	"github.com/johnfercher/maroto/v2/pkg/components/page"
 	"github.com/johnfercher/maroto/v2/pkg/components/row"
 	"github.com/johnfercher/maroto/v2/pkg/components/text"
@@ -38,6 +39,31 @@ var (
 // Manager handles PDF report generation
 type Manager struct {
 	logger func(message, function string)
+}
+
+type newItemMap struct {
+	Name  string
+	Count int
+}
+
+func (s newItemMap) GetHeader() core.Row {
+	return row.New(8).Add(
+		text.NewCol(9, "SDK", props.Text{Style: fontstyle.Bold, Color: &darkCharcoal}),
+		text.NewCol(3, "Matches", props.Text{Style: fontstyle.Bold, Align: align.Right, Color: &darkCharcoal}),
+	).WithStyle(&props.Cell{BackgroundColor: &lightGray})
+}
+
+func (s newItemMap) GetContent(i int) core.Row {
+	r := row.New(7).Add(
+		text.NewCol(9, s.Name, props.Text{Size: 10, Color: &mediumGray}),
+		text.NewCol(3, fmt.Sprintf("%d", s.Count), props.Text{Size: 10, Align: align.Right, Color: &mediumGray}),
+	)
+
+	if i%2 == 0 {
+		r.WithStyle(&props.Cell{BackgroundColor: &veryLightGray})
+	}
+
+	return r
 }
 
 // NewManager creates a new report Manager
@@ -136,8 +162,40 @@ func wrapTextLong(text string, maxCharsPerLine int, maxLength int) string {
 	return result.String()
 }
 
+// Function to build SDK and Permissions list for front page summary and details section. Returns rows, sorted names, and error if any.
+func (rm *Manager) rowBuilder(itemMap map[string][]string) ([]core.Row, []string, error) {
+	if len(itemMap) == 0 {
+		return []core.Row{
+			row.New(7).Add(
+				text.NewCol(12, "None", props.Text{Size: 11, Color: &mediumGray}),
+			),
+		}, nil, nil
+	}
+
+	names := make([]string, 0, len(itemMap))
+	for item := range itemMap {
+		names = append(names, item)
+	}
+	sort.Strings(names)
+
+	items := make([]newItemMap, 0, len(names))
+	for _, item := range names {
+		items = append(items, newItemMap{
+			Name:  item,
+			Count: len(itemMap[item]),
+		})
+	}
+
+	rows, err := list.Build[newItemMap](items)
+	if err != nil {
+		return nil, names, err
+	}
+
+	return rows, names, nil
+}
+
 // MakeMarotoReport generates a professional PDF report using Maroto v2
-func (rm *Manager) MakeMarotoReport(applicationName, applicationBundleID, appStoreDescription string, outPath string, sdkMap map[string][]string, permissionMap map[string]models.PermissionDetail) error {
+func (rm *Manager) MakeMarotoReport(applicationName, applicationBundleID, appStoreDescription, appStoreIcon, appStoreURL, outPath string, sdkMap map[string][]string, permissionMap map[string]models.PermissionDetail) error {
 	// Create config
 	cfg := config.NewBuilder().
 		WithDimensions(210, 297).
@@ -152,13 +210,12 @@ func (rm *Manager) MakeMarotoReport(applicationName, applicationBundleID, appSto
 	// Build documents
 
 	// Front page
-	rm.buildHeader(mrt, applicationName)
-	rm.buildFrontPage(mrt, applicationName, applicationBundleID, appStoreDescription, len(sdkMap), len(permissionMap))
+	rm.buildHeader(mrt, applicationName, applicationBundleID, len(sdkMap))
+	rm.buildFrontPage(mrt, applicationName, applicationBundleID, appStoreDescription, appStoreIcon, appStoreURL, sdkMap, permissionMap)
 	mrt.AddPages(page.New())
 
 	// Details pages
-	rm.buildHeader(mrt, applicationName)
-	rm.buildInfo(mrt, applicationBundleID, len(sdkMap))
+	rm.buildHeader(mrt, applicationName, applicationBundleID, len(sdkMap))
 	rm.buildSDKSection(mrt, sdkMap)
 	rm.buildPermissionsSection(mrt, permissionMap)
 	rm.buildFooter(mrt)
@@ -178,16 +235,49 @@ func (rm *Manager) MakeMarotoReport(applicationName, applicationBundleID, appSto
 	return nil
 }
 
-func (rm *Manager) buildFrontPage(m core.Maroto, applicationName, bundleID string, appStoreDescription string, sdkCount, permissionCount int) {
+// buildHeader creates a consistent header for each page with the application name and report title
+func (rm *Manager) buildHeader(m core.Maroto, applicationName string, bundleID string, sdkCount int) {
+	m.AddRows(
+		row.New(20).Add(
+			col.New(12).Add(
+				text.New(fmt.Sprintf("AppMonitor Analysis Report: %s", applicationName), props.Text{
+					Top:   6,
+					Size:  16,
+					Style: fontstyle.Bold,
+					Align: align.Center,
+					Color: &props.WhiteColor,
+				}),
+			),
+		).WithStyle(&props.Cell{BackgroundColor: &professionalBlue}),
+		row.New(8).Add(
+			col.New(6).Add(
+				text.New(fmt.Sprintf("Total SDKs: %d", sdkCount), props.Text{
+					Size:  11,
+					Style: fontstyle.Bold,
+				}),
+			),
+			col.New(6).Add(
+				text.New(fmt.Sprintf("Bundle ID: %s", bundleID), props.Text{
+					Size:  10,
+					Align: align.Right,
+					Style: fontstyle.Bold,
+				}),
+			),
+		),
+		row.New(2),
+	)
+}
+
+func (rm *Manager) buildFrontPage(m core.Maroto, applicationName, bundleID string, appStoreDescription string, appStoreIcon string, appStoreURL string, sdkMap map[string][]string, permissionMap map[string]models.PermissionDetail) {
 	// Developer mod - Add border around every element for easier debugging
 
-	icon := "./testicon.png" // Placeholder icon path - replace with actual app icon if available
+	//icon := "./testicon.png" // Placeholder icon path - replace with actual app icon if available
 
 	// Icon left and text about the app on the right
 	m.AddRows(
 		row.New(40).Add(
 			// First Column with icon
-			image.NewFromFileCol(3, icon, props.Rect{
+			image.NewFromFileCol(3, appStoreIcon, props.Rect{
 				Center:  true,
 				Percent: 80,
 			}),
@@ -211,75 +301,90 @@ func (rm *Manager) buildFrontPage(m core.Maroto, applicationName, bundleID strin
 		row.New(1).WithStyle(&props.Cell{BackgroundColor: &charcoalDivider}),
 		row.New(5),
 	)
-	// Two columns with stats - total sdks as int and then a list of the sdks, and then total permissions as int and a list of the permissions.
+	// Summary row with total SDKs and permissions detected, followed by a list of detected SDKs with counts
 	m.AddRows(
-		row.New(20).Add(
-			// SDK Column
+		row.New(10).Add(
 			col.New(6).Add(
-				text.New(fmt.Sprintf("Total SDKs: %d", sdkCount), props.Text{
+				text.New(fmt.Sprintf("Total SDKs: %d", len(sdkMap)), props.Text{
 					Size:  14,
 					Style: fontstyle.Bold,
 					Color: &professionalBlue,
 				}),
-				text.New("SDKs Detected:", props.Text{
-					Size:  12,
+			).WithStyle(&props.Cell{BackgroundColor: &cardBeige}),
+			col.New(6).Add(
+				text.New(fmt.Sprintf("Total Permissions: %d", len(permissionMap)), props.Text{
+					Size:  14,
 					Style: fontstyle.Bold,
-					Color: &mediumGray,
-					Top:   10,
+					Color: &professionalBlue,
 				}),
-				// List SDKs with bullet points and without classnames
+			).WithStyle(&props.Cell{BackgroundColor: &cardBeige}),
+		),
+	)
 
-			),
-			// Permissions Column
-			col.New(6).Add(
-				text.New(fmt.Sprintf("Total Permissions: %d", permissionCount), props.Text{
-					Size:  14,
-					Style: fontstyle.Bold,
-					Color: &professionalBlue,
-				}),
-			),
+	sdkNames := make([]string, 0, len(sdkMap))
+	for sdk := range sdkMap {
+		sdkNames = append(sdkNames, sdk)
+	}
+	sort.Strings(sdkNames)
+
+	permissionNames := make([]string, 0, len(permissionMap))
+	for permission := range permissionMap {
+		permissionNames = append(permissionNames, permission)
+	}
+	sort.Strings(permissionNames)
+
+	maxRows := len(sdkNames)
+	if len(permissionNames) > maxRows {
+		maxRows = len(permissionNames)
+	}
+
+	m.AddRow(7,
+		col.New(6).Add(
+			text.New("SDKs Detected:", props.Text{Size: 10, Style: fontstyle.Bold, Color: &darkCharcoal}),
+		).WithStyle(&props.Cell{BackgroundColor: &cardBeige}),
+		col.New(6).Add(
+			text.New("Permissions Detected:", props.Text{Size: 10, Style: fontstyle.Bold, Color: &darkCharcoal}),
 		).WithStyle(&props.Cell{BackgroundColor: &cardBeige}),
 	)
-}
 
-func (rm *Manager) buildHeader(m core.Maroto, applicationName string) {
-	m.AddRows(
-		row.New(20).Add(
-			col.New(12).Add(
-				text.New(fmt.Sprintf("AppMonitor Analysis Report: %s", applicationName), props.Text{
-					Top:   6,
-					Size:  16,
-					Style: fontstyle.Bold,
-					Align: align.Center,
-					Color: &props.WhiteColor,
-				}),
-			),
-		).WithStyle(&props.Cell{BackgroundColor: &professionalBlue}),
-		row.New(2),
-	)
-}
+	if maxRows == 0 {
+		m.AddRow(7,
+			col.New(6).Add(
+				text.New("None", props.Text{Size: 10, Color: &mediumGray}),
+			).WithStyle(&props.Cell{BackgroundColor: &cardBeige}),
+			col.New(6).Add(
+				text.New("None", props.Text{Size: 10, Color: &mediumGray}),
+			).WithStyle(&props.Cell{BackgroundColor: &cardBeige}),
+		)
+		return
+	}
 
-func (rm *Manager) buildInfo(m core.Maroto, bundleID string, sdkCount int) {
-	m.AddRows(
-		row.New(8).Add(
+	for i := 0; i < maxRows; i++ {
+		sdkText := ""
+		if i < len(sdkNames) {
+			sdkName := sdkNames[i]
+			sdkText = fmt.Sprintf("• %s (%d matches)", sdkName, len(sdkMap[sdkName]))
+		}
+
+		permissionText := ""
+		if i < len(permissionNames) {
+			permissionName := permissionNames[i]
+			commonName := strings.TrimSpace(permissionMap[permissionName].CommonName)
+			if commonName == "" {
+				commonName = permissionName
+			}
+			permissionText = fmt.Sprintf("• %s", commonName)
+		}
+
+		m.AddRow(7,
 			col.New(6).Add(
-				text.New(fmt.Sprintf("Total SDKs: %d", sdkCount), props.Text{
-					Size:  11,
-					Style: fontstyle.Bold,
-				}),
-			),
+				text.New(sdkText, props.Text{Size: 10, Color: &mediumGray}),
+			).WithStyle(&props.Cell{BackgroundColor: &cardBeige}),
 			col.New(6).Add(
-				text.New(fmt.Sprintf("Bundle ID: %s", bundleID), props.Text{
-					Size:  10,
-					Align: align.Right,
-					Style: fontstyle.Bold,
-				}),
-			),
-		),
-		row.New(2),
-		row.New(1).WithStyle(&props.Cell{BackgroundColor: &slateBlue}),
-		row.New(3),
-	)
+				text.New(permissionText, props.Text{Size: 10, Color: &mediumGray}),
+			).WithStyle(&props.Cell{BackgroundColor: &cardBeige}),
+		)
+	}
 }
 
 func (rm *Manager) buildSDKSection(m core.Maroto, sdkMap map[string][]string) {
@@ -296,35 +401,44 @@ func (rm *Manager) buildSDKSection(m core.Maroto, sdkMap map[string][]string) {
 		return
 	}
 
-	sdkNames := make([]string, 0, len(sdkMap))
-	for sdk := range sdkMap {
-		sdkNames = append(sdkNames, sdk)
+	rows, sdkNames, err := rm.rowBuilder(sdkMap)
+	if err != nil {
+		rm.logger(fmt.Sprintf("unable to build SDK list rows: %v", err), "report.Manager.buildSDKSection")
+		for _, sdk := range sdkNames {
+			m.AddRow(7,
+				col.New(12).Add(
+					text.New(fmt.Sprintf("• %s (%d matches)", sdk, len(sdkMap[sdk])), props.Text{Size: 11, Color: &mediumGray}),
+				),
+			)
+		}
+	} else {
+		m.AddRows(rows...)
 	}
-	sort.Strings(sdkNames)
 
-	for i, sdk := range sdkNames {
-		bgColor := &props.WhiteColor
-		if i%2 == 0 {
-			bgColor = &veryLightGray
+	m.AddRow(3)
+
+	for _, sdk := range sdkNames {
+		if len(sdkMap[sdk]) == 0 {
+			continue
 		}
 
-		m.AddRow(8,
+		m.AddRow(6,
 			col.New(12).Add(
-				text.New(fmt.Sprintf("● %s", sdk), props.Text{
-					Size:  12,
+				text.New(fmt.Sprintf("%s classes:", sdk), props.Text{
+					Size:  10,
 					Style: fontstyle.Bold,
-					Color: &mediumGray,
-					Left:  2,
+					Color: &slateBlue,
 				}),
 			),
-		).WithStyle(&props.Cell{BackgroundColor: bgColor})
+		)
 
 		for _, className := range sdkMap[sdk] {
 			m.AddRow(5,
 				col.New(12).Add(
-					text.New(fmt.Sprintf("   → %s", className), props.Text{
-						Size: 9,
-						Left: 5,
+					text.New(fmt.Sprintf("  - %s", className), props.Text{
+						Size:  8,
+						Left:  4,
+						Color: &mediumGray,
 					}),
 				),
 			)
