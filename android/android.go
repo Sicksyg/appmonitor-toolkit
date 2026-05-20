@@ -111,7 +111,23 @@ func (m *Manager) GetSDKsFromExodus(authToken string) {
 		m.logger(fmt.Sprintf("Error reading response body: %v", err), "Manager.GetSDKsFromExodus")
 		return
 	}
-	err = os.WriteFile("all_sdks.json", body, 0644)
+
+	var parsed interface{}
+	err = json.Unmarshal(body, &parsed)
+	if err != nil {
+		m.logger(fmt.Sprintf("Error parsing response JSON: %v", err), "Manager.GetSDKsFromExodus")
+		return
+	}
+
+	formattedBody, err := json.MarshalIndent(parsed, "", "    ")
+	if err != nil {
+		m.logger(fmt.Sprintf("Error formatting JSON: %v", err), "Manager.GetSDKsFromExodus")
+		return
+	}
+
+	filename := "./assets/all_SDK.json"
+
+	err = os.WriteFile(filename, formattedBody, 0644)
 	if err != nil {
 		m.logger(fmt.Sprintf("Error writing SDK data to file: %v", err), "Manager.GetSDKsFromExodus")
 		return

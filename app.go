@@ -249,6 +249,7 @@ func (a *App) StartIosAnalysis() {
 	}
 
 	fmt.Printf("Image path in report input: %s\n", reportInput.AppStoreIconPath)
+
 	if err := a.reportMgr.MakeMarotoReport(reportInput); err != nil {
 		a.emitStatus("error", "Report generation failed: "+err.Error(), 100)
 		a.Log("Error generating PDF report: "+err.Error(), "App.StartAnalysis")
