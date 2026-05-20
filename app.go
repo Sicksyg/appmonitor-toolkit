@@ -16,8 +16,8 @@ import (
 
 	"AppMonitor/analysis"
 	"AppMonitor/android"
+	"AppMonitor/appstores"
 	"AppMonitor/helpers"
-	"AppMonitor/itunes"
 	"AppMonitor/models"
 	"AppMonitor/report"
 )
@@ -28,7 +28,7 @@ func NewApp() *App {
 		analysisDone: make(chan struct{}),
 	}
 	app.reportMgr = report.NewManager(app.Log)
-	app.itunesMgr = itunes.NewManager(app.Log)
+	app.appstoresMgr = appstores.NewManager(app.Log)
 	app.analysisMgr = analysis.NewManager(app.Log)
 	app.androidMgr = android.NewManager(app.Log)
 	return app
@@ -42,7 +42,7 @@ type App struct {
 	appinfo      AppInfo
 	analysisDone chan struct{}
 	reportMgr    *report.Manager
-	itunesMgr    *itunes.Manager
+	appstoresMgr *appstores.Manager
 	helpersMgr   *helpers.Manager
 	analysisMgr  *analysis.Manager
 	androidMgr   *android.Manager
@@ -52,20 +52,21 @@ type App struct {
 
 // AppInfo struct to hold app information and installation details for the analysis
 type AppInfo struct {
-	Name             string
-	BundleID         string
-	InstallPath      string
-	UDID             string
-	ArtworkUrl       string
-	SellerName       string
-	ArtistViewUrl    string
-	Description      string
-	AppStoreURL      string
-	AppStoreIconPath string
-	InstalledApps    []helpers.InstalledApp
-	ResultsPath      string
-	SDKs             map[string][]string
-	Permissions      map[string]models.PermissionDetail
+	Name               string
+	BundleID           string
+	InstallPath        string
+	UDID               string
+	ArtworkUrl         string
+	SellerName         string
+	ArtistViewUrl      string
+	Description        string
+	AppStoreURL        string
+	AppStoreIconPath   string
+	InstalledApps      []helpers.InstalledApp
+	ResultsPath        string
+	SDKs               map[string][]string
+	IosPermissions     map[string]models.IosPermissionDetail
+	AndroidPermissions map[string]models.AndroidPermissionDetail
 }
 
 // AnalysisStatus struct to hold analysis status
@@ -166,6 +167,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.helpersMgr = helpers.NewManager(a.Log, ctx)
 	a.analysisMgr = analysis.NewManager(a.Log)
+	a.appstoresMgr = appstores.NewManager(a.Log)
 	a.androidMgr = android.NewManager(a.Log)
 
 	// setup tmp directory for analysis results
@@ -203,15 +205,13 @@ func (a *App) DownloadAndInstall(udid string, bundleID string) {
 }
 
 // ------------------------- Main iOS analysis flow ----------------------- //
-
-// Main function to start analysis
-func (a *App) StartAnalysis() {
+func (a *App) StartIosAnalysis() {
 	a.emitStatus("start", "Starting analysis", 0)
 	a.Log("Starting analysis for: "+a.appinfo.BundleID, "App.StartAnalysis")
 
 	// Reset AppInfo struct for fresh analysis
 	a.appinfo.SDKs = make(map[string][]string)
-	a.appinfo.Permissions = make(map[string]models.PermissionDetail)
+	a.appinfo.IosPermissions = make(map[string]models.IosPermissionDetail)
 	a.appinfo.ResultsPath = ""
 
 	a.emitStatus("download", "Downloading and installing", 10)
@@ -227,7 +227,7 @@ func (a *App) StartAnalysis() {
 
 	time.Sleep(time.Second * 2)
 
-	a.appinfo.Permissions = enrichedPermissions
+	a.appinfo.IosPermissions = enrichedPermissions
 	a.appinfo.SDKs = sdks
 
 	if err := a.analysisMgr.Cleanup(); err != nil {
@@ -237,7 +237,19 @@ func (a *App) StartAnalysis() {
 
 	a.emitStatus("report", "Generating report", 85)
 	reportPath := filepath.Join("tmp", fmt.Sprintf("%s_report.pdf", a.appinfo.BundleID))
-	if err := a.reportMgr.MakeMarotoReport(a.appinfo.Name, a.appinfo.BundleID, a.appinfo.Description, a.appinfo.AppStoreIcon, a.appinfo.AppStoreURL, reportPath, a.appinfo.SDKs, a.appinfo.Permissions); err != nil {
+	reportInput := report.Input{
+		ApplicationName:     a.appinfo.Name,
+		ApplicationBundleID: a.appinfo.BundleID,
+		AppStoreDescription: a.appinfo.Description,
+		AppStoreIconPath:    a.appinfo.AppStoreIconPath,
+		AppStoreURL:         a.appinfo.AppStoreURL,
+		OutPath:             reportPath,
+		SDKMap:              a.appinfo.SDKs,
+		Permissions:         report.IosPermissionItems(a.appinfo.IosPermissions),
+	}
+
+	fmt.Printf("Image path in report input: %s\n", reportInput.AppStoreIconPath)
+	if err := a.reportMgr.MakeMarotoReport(reportInput); err != nil {
 		a.emitStatus("error", "Report generation failed: "+err.Error(), 100)
 		a.Log("Error generating PDF report: "+err.Error(), "App.StartAnalysis")
 		return
@@ -255,11 +267,46 @@ func (a *App) StartAndroidAnalysis() {
 
 	// get app data from Exodus API
 	a.emitStatus("fetch", "Fetching app data from Exodus API", 20)
-	a.androidMgr.GetAppDataFromExodus(a.appinfo.BundleID, a.settings.ExodusAPIKey.Key)
 
 	// analyze the downloaded apk file using exodus api
 	a.emitStatus("analyze", "Analyzing app with Exodus", 60)
-	a.androidMgr.GetAppDataFromExodus(a.appinfo.BundleID, a.settings.ExodusAPIKey.Key)
+
+	permissions, sdks, err := a.androidMgr.RunCompleteAnalysis(a.appinfo.BundleID, a.settings.ExodusAPIKey.Key)
+	if err != nil {
+		a.emitStatus("error", "Android analysis failed: "+err.Error(), 100)
+		a.Log("Error during Android analysis: "+err.Error(), "App.StartAndroidAnalysis")
+		return
+	}
+
+	a.appinfo.AndroidPermissions = permissions
+	a.appinfo.SDKs = sdks
+
+	time.Sleep(time.Second * 2)
+
+	if err := a.analysisMgr.Cleanup(); err != nil {
+		a.emitStatus("cleanup", "Cleanup warning: "+err.Error(), 75)
+		a.Log("Warning: Error during frida cleanup: "+err.Error(), "App.StartAnalysis")
+	}
+
+	a.emitStatus("report", "Generating report", 85)
+	reportPath := filepath.Join("tmp", fmt.Sprintf("%s_report.pdf", a.appinfo.BundleID))
+	reportInput := report.Input{
+		ApplicationName:     a.appinfo.Name,
+		ApplicationBundleID: a.appinfo.BundleID,
+		AppStoreDescription: a.appinfo.Description,
+		AppStoreIconPath:    a.appinfo.AppStoreIconPath,
+		AppStoreURL:         a.appinfo.AppStoreURL,
+		OutPath:             reportPath,
+		SDKMap:              a.appinfo.SDKs,
+		Permissions:         report.AndroidPermissionItems(a.appinfo.AndroidPermissions),
+	}
+	if err := a.reportMgr.MakeMarotoReport(reportInput); err != nil {
+		a.emitStatus("error", "Report generation failed: "+err.Error(), 100)
+		a.Log("Error generating PDF report: "+err.Error(), "App.StartAnalysis")
+		return
+	}
+
+	a.appinfo.ResultsPath = reportPath
 
 	a.emitStatus("done", "Analysis complete", 100)
 	a.Log("Android analysis complete for: "+a.appinfo.BundleID, "App.StartAndroidAnalysis")
@@ -282,7 +329,7 @@ func (a *App) LoadFromPhone() string {
 	// Search iTunes for each installed app bundleID to get more info and store results in a list
 	var results []map[string]interface{}
 	for _, program := range programs {
-		itunesResult := a.itunesMgr.ItunesSearchBundle(program.CFBundleIdentifier)
+		itunesResult := a.appstoresMgr.ItunesSearchBundle(program.CFBundleIdentifier)
 		if itunesResult != "" {
 			var result map[string]interface{}
 			if err := json.Unmarshal([]byte(itunesResult), &result); err == nil {
@@ -296,20 +343,22 @@ func (a *App) LoadFromPhone() string {
 }
 
 func (a *App) Search(bundleID string) string {
-	return a.itunesMgr.ItunesSearchBundle(bundleID)
+	return a.appstoresMgr.ItunesSearchBundle(bundleID)
 }
 
-func (a *App) SearchWild(term string) string {
-	return a.itunesMgr.ItunesSearchWild(term)
+// SearchWild performs a search on iTunes with the given term and returns the results to the frontend
+func (a *App) ItunesSearchWild(term string) string {
+	return a.appstoresMgr.ItunesSearchWild(term)
 }
 
 // -- Helper functions for Google Play Store search -- //
 
 // SearchGooglePlay searches the Google Play Store for the given term and returns a list of matching apps
 func (a *App) SearchGooglePlay(term string) string {
-	return a.androidMgr.GooglePlaySearch(term)
+	return a.appstoresMgr.GooglePlaySearch(term)
 }
 
+// SelectItem is called when the user selects an app from the search results. It sets the selected app's details in the AppInfo struct for use in the analysis.
 func (a *App) SelectItem(trackName string, trackId int, bundleId string, artworkUrl string, sellerName string, artistViewUrl string, description string) {
 	a.Log(fmt.Sprintf("Selected item - trackName: %s, trackId: %d, bundleId: %s", trackName, trackId, bundleId), "App.SelectItem")
 	// set the AppStruct to the selected item
@@ -320,58 +369,9 @@ func (a *App) SelectItem(trackName string, trackId int, bundleId string, artwork
 	a.appinfo.ArtistViewUrl = artistViewUrl
 	a.appinfo.Description = description
 
-	a.helpersMgr.DownloadAndSaveAppIcon(artworkUrl, bundleId)
+	a.appinfo.AppStoreIconPath = a.helpersMgr.DownloadAndSaveAppIcon(artworkUrl, bundleId)
 
-	a.Log(fmt.Sprintf("App info updated - Name: %s, BundleID: %s, ArtworkUrl: %s, SellerName: %s, ArtistViewUrl: %s, Description: %s", a.appinfo.Name, a.appinfo.BundleID, a.appinfo.ArtworkUrl, a.appinfo.SellerName, a.appinfo.ArtistViewUrl, a.appinfo.Description), "App.SelectItem")
-}
-
-// OpenFile opens a file dialog
-func (a *App) LoadIpaFile() string {
-	// This function opens a file dialog to select an IPA file for install and analysis
-	a.Log("Opening file dialog", "App.LoadIpaFile")
-	filePath, err := wruntime.OpenFileDialog(a.ctx, wruntime.OpenDialogOptions{
-		Title:            "Select a file",
-		DefaultDirectory: "./Test_files/",
-		Filters: []wruntime.FileFilter{
-			{
-				DisplayName: "IPA Files",
-				Pattern:     "*.ipa",
-			},
-		},
-	})
-	if err != nil {
-		fmt.Println("Failed to open file dialog:", err)
-		return ""
-	}
-
-	// set the AppStruct
-	a.appinfo.InstallPath = filePath
-
-	return filePath
-}
-
-func (a *App) LoadAppList() string {
-	// This function loads a list of apps from a CSV file and returns the content as an ordered list
-	a.Log("Loading app list", "App.LoadAppList")
-	filePath, err := wruntime.OpenFileDialog(a.ctx, wruntime.OpenDialogOptions{
-		Title:            "Select a file",
-		DefaultDirectory: "./Test_files/",
-		Filters: []wruntime.FileFilter{
-			{
-				DisplayName: "CSV Files",
-				Pattern:     "*.csv",
-			},
-		},
-	})
-	if err != nil {
-		fmt.Println("Failed to open file dialog:", err)
-		return ""
-	}
-	fmt.Println("Selected file:", filePath)
-
-	a.appinfo.InstallPath = filePath
-
-	return filePath
+	a.Log(fmt.Sprintf("App info updated:\n  Name: %s\n  BundleID: %s\n  ArtworkUrl: %s\n  SellerName: %s\n  ArtistViewUrl: %s\n  Description: %s", a.appinfo.Name, a.appinfo.BundleID, a.appinfo.ArtworkUrl, a.appinfo.SellerName, a.appinfo.ArtistViewUrl, a.appinfo.Description), "App.SelectItem")
 }
 
 func (a *App) OpenUrl(url string) {
@@ -465,4 +465,26 @@ func (a *App) OpenReportFileInDefaultApp() {
 	default:
 		a.Log("Unsupported OS for opening files", "helpers.OpenFileInDefaultApp")
 	}
+}
+
+func (a *App) LoadAppList() string {
+	// This function loads a list of apps from a CSV file and returns the content as an ordered list
+	a.Log("Loading app list", "helpers.Manager.LoadAppList")
+	filePath, err := wruntime.OpenFileDialog(a.ctx, wruntime.OpenDialogOptions{
+		Title:            "Select a file",
+		DefaultDirectory: "./tmp/",
+		Filters: []wruntime.FileFilter{
+			{
+				DisplayName: "CSV Files",
+				Pattern:     "*.csv",
+			},
+		},
+	})
+	if err != nil {
+		fmt.Println("Failed to open file dialog:", err)
+		return ""
+	}
+	fmt.Println("Selected file:", filePath)
+
+	return filePath
 }

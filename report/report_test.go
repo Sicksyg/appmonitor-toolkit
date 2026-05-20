@@ -59,7 +59,7 @@ func TestMakeMarotoReport_WithMockData_WritesPDF(t *testing.T) {
 		},
 	}
 
-	permissionMap := map[string]models.PermissionDetail{
+	permissionMap := map[string]models.IosPermissionDetail{
 		"NSCameraUsageDescription": {
 			CommonName:           "Camera",
 			AppleDescription:     "Accesses camera hardware for image capture.",
@@ -97,8 +97,18 @@ func TestMakeMarotoReport_WithMockData_WritesPDF(t *testing.T) {
 
 	outPath := filepath.Join(outDir, "mock_analysis_report.pdf")
 	rm := NewManager(func(_, _ string) {})
+	permissions := IosPermissionItems(permissionMap)
 
-	if err := rm.MakeMarotoReport("Mock App", "com.example.mockapp", appStoreDescription, outPath, sdkMap, permissionMap); err != nil {
+	if err := rm.MakeMarotoReport(Input{
+		ApplicationName:     "Mock App",
+		ApplicationBundleID: "com.example.mockapp",
+		AppStoreDescription: appStoreDescription,
+		AppStoreIconPath:    "",
+		AppStoreURL:         "https://example.com/app",
+		OutPath:             outPath,
+		SDKMap:              sdkMap,
+		Permissions:         permissions,
+	}); err != nil {
 		t.Fatalf("MakeMarotoReport failed: %v", err)
 	}
 

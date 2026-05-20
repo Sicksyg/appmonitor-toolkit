@@ -24,6 +24,9 @@
                         {{ loading ? 'Searching...' : 'Search' }}
                     </button>
                 </div>
+                <div class="action-row wrap">
+                    <button class="btn android tertiary" type="button" @click="handleLoadAppList">Load App List</button>
+                </div>
             </div>
 
             <p class="status-line" v-if="statusMessage">{{ statusMessage }}</p>
@@ -50,7 +53,7 @@
                         <tr v-for="item in results" :key="`${item.trackId}-${item.bundleId}`" class="result-row"
                             @click="handleSelectItem(item)">
                             <td>
-                                <img v-if="item.artworkUrl60" :src="item.artworkUrl60" :alt="`${item.trackName} logo`"
+                                <img v-if="item.artworkUrl100" :src="item.artworkUrl100" :alt="`${item.trackName} logo`"
                                     class="result-logo" />
                             </td>
                             <td>{{ item.trackName }}</td>
@@ -68,7 +71,7 @@
 <script setup>
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
-import { SearchGooglePlay, SelectItem, StartAndroidAnalysis } from '../../wailsjs/go/main/App'
+import { SearchGooglePlay, SelectItem, StartAndroidAnalysis, LoadAppList } from '../../wailsjs/go/main/App'
 import AppIcon from '../components/AppIcon.vue'
 
 const searchTerm = ref('')
@@ -96,7 +99,6 @@ async function handleSearch() {
         resultsMessage.value = 'Enter a search term first.'
         return
     }
-
     loading.value = true
     resultsMessage.value = 'Searching...'
     try {
@@ -111,10 +113,12 @@ async function handleSearch() {
     }
 }
 
+// Tells Go which app is selected (sets BundleID + Name), then clears the results table
 async function handleSelectItem(item) {
     try {
-        await SelectItem(item.trackName, item.trackId, item.bundleId)
+        await SelectItem(item.trackName, item.trackId, item.bundleId, item.artworkUrl100, item.sellerName, item.artistViewUrl, item.description)
         searchTerm.value = `${item.trackName} (${item.bundleId})`
+        placeholder.value = item.trackName
         results.value = []
         resultsMessage.value = ''
     } catch (error) {
@@ -127,6 +131,13 @@ function handleStartAnalysis() {
     StartAndroidAnalysis().catch((error) => {
         console.error(error)
         statusMessage.value = 'Failed to start analysis.'
+    })
+}
+
+function handleLoadAppList() {
+    LoadAppList().catch((error) => {
+        console.error(error)
+        statusMessage.value = 'Failed to load app list.'
     })
 }
 

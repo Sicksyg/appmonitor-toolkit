@@ -1,0 +1,294 @@
+{
+    "permissions": {
+        "1": {
+            "plkey": "NSBluetoothAlwaysUsageDescription",
+            "commonName": "Bluetooth access",
+            "description": "A message that tells the user why the app needs access to Bluetooth.",
+            "category": "Bluetooth"
+        },
+        "2": {
+            "plkey": "NSCalendarsUsageDescription",
+            "commonName": "Calendars access",
+            "description": "A message that tells the user why the app is requesting access to the users calendar data.",
+            "category": "Calender"
+        },
+        "3": {
+            "plkey": "NSRemindersUsageDescription",
+            "commonName": "Reminders access",
+            "description": "A message that tells the user why the app is requesting access to the user's reminders.",
+            "category": "Calender"
+        },
+        "4": {
+            "plkey": "NSCameraUsageDescription",
+            "commonName": "Camera access",
+            "description": "A message that tells the user why the app is requesting access to the device's camera.",
+            "category": "Camera and microphone"
+        },
+        "5": {
+            "plkey": "NSMicrophoneUsageDescription",
+            "commonName": "Microphone access",
+            "description": "A message that tells the user why the app is requesting access to the device's microphone.",
+            "category": "Camera and microphone"
+        },
+        "6": {
+            "plkey": "NSContactsUsageDescription",
+            "commonName": "Contact information access",
+            "description": "A message that tells the user why the app is requesting access to the user's contacts.",
+            "category": "Contacts"
+        },
+        "7": {
+            "plkey": "NSFaceIDUsageDescription",
+            "commonName": "Face ID access",
+            "description": "A message that tells the user why the app is requesting the ability to authenticate with Face ID.",
+            "category": "Face ID"
+        },
+        "8": {
+            "plkey": "NSDesktopFolderUsageDescription",
+            "commonName": "File access to Desktop folder",
+            "description": "A message that tells the user why the app needs access to the user's Desktop folder.",
+            "category": "Files and folders"
+        },
+        "9": {
+            "plkey": "NSDocumentsFolderUsageDescription",
+            "commonName": "File access to Documents folder",
+            "description": "A message that tells the user why the app needs access to the user's Documents folder.",
+            "category": "Files and folders"
+        },
+        "10": {
+            "plkey": "NSDownloadsFolderUsageDescription",
+            "commonName": "File access to Downloads folder",
+            "description": "A message that tells the user why the app needs access to the user's Downloads folder.",
+            "category": "Files and folders"
+        },
+        "11": {
+            "plkey": "NSNetworkVolumesUsageDescription",
+            "commonName": "File access to Network volumes",
+            "description": "A message that tells the user why the app needs access to files on a network volume.",
+            "category": "Files and folders"
+        },
+        "12": {
+            "plkey": "NSRemovableVolumesUsageDescription",
+            "commonName": "File acess to removeable volumes (external storage)",
+            "description": "A message that tells the user why the app needs access to files on a removable volume.",
+            "category": "Files and folders"
+        },
+        "13": {
+            "plkey": "NSFileProviderDomainUsageDescription",
+            "commonName": "File acess to files managed by a file provider",
+            "description": "A message that tells the user why the app needs access to files managed by a file provider.",
+            "category": "Files and folders"
+        },
+        "14": {
+            "plkey": "NSGKFriendListUsageDescription",
+            "commonName": "Access to Game Center friends list",
+            "description": "A message that tells the user why the app needs access to their Game Center friends list",
+            "category": "Game center"
+        },
+        "15": {
+            "plkey": "NSHealthClinicalHealthRecordsShareUsageDescription",
+            "commonName": "Access health data",
+            "description": "A message to the user that explains why the app requested permission to read clinical records.",
+            "category": "Health"
+        },
+        "16": {
+            "plkey": "NSHealthShareUsageDescription",
+            "commonName": "Read health data samples",
+            "description": "A message to the user that explains why the app requested permission to read samples from the HealthKit store.",
+            "category": "Health"
+        },
+        "17": {
+            "plkey": "NSHealthUpdateUsageDescription",
+            "commonName": "Write health data",
+            "description": "A message to the user that explains why the app requested permission to save samples to the HealthKit store.",
+            "category": "Health"
+        },
+        "18": {
+            "plkey": "NSHealthRequiredReadAuthorizationTypeIdentifiers",
+            "commonName": "Read health data",
+            "description": "The clinical record data types that your app must get permission to read.",
+            "category": "Health"
+        },
+        "19": {
+            "plkey": "NSHomeKitUsageDescription",
+            "commonName": "Homekit data access",
+            "description": "A message that tells the user why the app is requesting access to the user's HomeKit configuration data.",
+            "category": "HomeKit"
+        },
+        "20": {
+            "plkey": "NSLocationAlwaysAndWhenInUseUsageDescription",
+            "commonName": "Location access",
+            "description": "A message that tells the user why the app is requesting access to the user's location information at all times.",
+            "category": "Location"
+        },
+        "21": {
+            "plkey": "NSLocationUsageDescription",
+            "commonName": "Location access",
+            "description": "A message that tells the user why the app is requesting access to the user’s location information",
+            "category": "Location"
+        },
+        "22": {
+            "plkey": "NSLocationWhenInUseUsageDescription",
+            "commonName": "Location access",
+            "description": "A message that tells the user why the app is requesting access to the user’s location information while the app is running in the foreground.",
+            "category": "Location"
+        },
+        "23": {
+            "plkey": "NSLocationTemporaryUsageDescriptionDictionary",
+            "commonName": "Location access",
+            "description": "A collection of messages that explain why the app is requesting temporary access to the user’s location.",
+            "category": "Location"
+        },
+        "24": {
+            "plkey": "NSWidgetWantsLocation",
+            "commonName": "Location access",
+            "description": "A Boolean value that indicates a widget uses the user’s location information.",
+            "category": "Location"
+        },
+        "25": {
+            "plkey": "NSLocationDefaultAccuracyReduced",
+            "commonName": "Location access",
+            "description": "A Boolean value that indicates whether the app requests reduced location accuracy by default.",
+            "category": "Location"
+        },
+        "26": {
+            "plkey": "NSAppleMusicUsageDescription",
+            "commonName": "Apple Music Library access",
+            "description": "A message that tells the user why the app is requesting access to the user’s media library.",
+            "category": "MediaPlayer"
+        },
+        "27": {
+            "plkey": "NSMotionUsageDescription",
+            "commonName": "Movement/Motion data access",
+            "description": " message that tells the user why the app is requesting access to the device’s motion data.",
+            "category": "Motion/Movement"
+        },
+        "28": {
+            "plkey": "NSFallDetectionUsageDescription",
+            "commonName": "Movement/Motion data access",
+            "description": "A message to the user that explains the app’s request for permission to access fall detection event data.",
+            "category": "Motion/Movement"
+        },
+        "29": {
+            "plkey": "NSLocalNetworkUsageDescription",
+            "commonName": "Local network access",
+            "description": "A message that tells the user why the app is requesting access to the local network.",
+            "category": "Network"
+        },
+        "30": {
+            "plkey": "NSNearbyInteractionUsageDescription",
+            "commonName": "Nearby device access",
+            "description": "A request for user permission to begin an interaction session with nearby devices.",
+            "category": "Network"
+        },
+        "31": {
+            "plkey": "NFCReaderUsageDescription",
+            "commonName": "NFC data access",
+            "description": "A message that tells the user why the app is requesting access to the device’s NFC hardware.",
+            "category": "NFC"
+        },
+        "32": {
+            "plkey": "NSPhotoLibraryAddUsageDescription",
+            "commonName": "Photo library write-only access",
+            "description": "A message that tells the user why the app is requesting add-only access to the user’s photo library.",
+            "category": "Photos"
+        },
+        "33": {
+            "plkey": "NSPhotoLibraryUsageDescription",
+            "commonName": "Photo library general access",
+            "description": "A message that tells the user why the app is requesting access to the user’s photo library.",
+            "category": "Photos"
+        },
+        "34": {
+            "plkey": "NSUpdateSecurityPolicy",
+            "commonName": "OS access to app files and Security Policy",
+            "description": "A dictionary that identifies which apps or installer packages the operating system allows to write to the app’s bundle.",
+            "category": "Security"
+        },
+        "35": {
+            "plkey": "NSUserTrackingUsageDescription",
+            "commonName": "Sensitive user data access",
+            "description": "A message that informs the user why an app is requesting permission to use data for tracking the user or the device.",
+            "category": "Security"
+        },
+        "36": {
+            "plkey": "NSAppleEventsUsageDescription",
+            "commonName": "Sensitive user data access",
+            "description": "A message that tells the user why the app is requesting the ability to send Apple events.",
+            "category": "Security"
+        },
+        "37": {
+            "plkey": "NSSensorKitUsageDescription",
+            "commonName": "Sensor data access",
+            "description": "A short description of the purpose of your app's research study.",
+            "category": "Sensors"
+        },
+        "38": {
+            "plkey": "NSSensorKitUsageDetail",
+            "commonName": "Sensor data access",
+            "description": "A dictionary that includes keys for the specific information your app collects.",
+            "category": "Sensors"
+        },
+        "39": {
+            "plkey": "NSSensorKitPrivacyPolicyURL",
+            "commonName": "Sensor data access",
+            "description": "A hyperlink to a webpage that displays the privacy policy for your app's research study.",
+            "category": "Sensors"
+        },
+        "40": {
+            "plkey": "NSSiriUsageDescription",
+            "commonName": "Send user data to Siri",
+            "description": "A message that tells the user why the app is requesting to send user data to Siri.",
+            "category": "Siri"
+        },
+        "41": {
+            "plkey": "NSSpeechRecognitionUsageDescription",
+            "commonName": "Access speech recognition data",
+            "description": "A message that tells the user why the app is requesting to send user data to Apple’s speech recognition servers.",
+            "category": "Speech"
+        },
+        "42": {
+            "plkey": "NSVideoSubscriberAccountUsageDescription",
+            "commonName": "Access TV provider infomation",
+            "description": "A message that tells the user why the app is requesting access to the user’s TV provider account.",
+            "category": "TV"
+        },
+        "43": {
+            "plkey": "NSIdentityUsageDescription",
+            "commonName": "Access Wallet ID information",
+            "description": "A message that tells the user why the app is requesting identity information.",
+            "category": "Wallet"
+        }
+    },
+    "resources": {
+        "1": {
+            "plkey": "NSAppleScriptEnabled",
+            "commonName": "AppleScript enabled",
+            "description": "A Boolean value indicating whether AppleScript is enabled.",
+            "category": "Scripting"
+        },
+        "2": {
+            "plkey": "ITSEncryptionExportComplianceCode",
+            "commonName": "Encryption detail",
+            "description": "The export compliance code provided by App Store Connect for apps that require it.",
+            "category": "Security"
+        },
+        "3":{
+            "plkey": "ITSAppUsesNonExemptEncryption",
+            "commonName": "App uses encryption",
+            "description": "A Boolean value indicating whether the app uses encryption.",
+            "category": "Security"
+        },
+        "4": {
+            "plkey": "NSSystemAdministrationUsageDescription",
+            "commonName": "Write system configuration on macOS",
+            "description": "A message in macOS that tells the user why the app is requesting to manipulate the system configuration.",
+            "category": "Security"
+        },
+        "5": {
+            "plkey": "UIRequiresPersistentWiFi",
+            "commonName": "App requires Wi-Fi connection",
+            "description": "A Boolean value indicating whether the app requires a Wi-Fi connection.",
+            "category": "Wi-Fi"
+        }
+    }
+}

@@ -1,13 +1,23 @@
 package models
 
-// PermissionDetail struct to hold enriched permission information
+// IosPermissionDetail struct to hold enriched permission information
 // Used by both analysis and report packages to maintain clean separation
-type PermissionDetail struct {
+type IosPermissionDetail struct {
 	CommonName           string `json:"commonName"`
 	AppleDescription     string `json:"appleDescription"`
 	DeveloperDescription string `json:"developerDescription"`
 	Category             string `json:"category,omitempty"`
 	PlistKey             string `json:"plistKey,omitempty"`
+}
+
+// AndroidPermissionDetail struct to hold enriched permission information for Android apps
+type AndroidPermissionDetail struct {
+	pkey                string `json:"pkey"`
+	CommonName          string `json:"commonName"`
+	DescriptionSimple   string `json:"descriptionSimple"`
+	DescriptionDetailed string `json:"descriptionDetailed"`
+	ProtectionLevel     string `json:"protectionLevel,omitempty"`
+	Link                string `json:"link,omitempty"`
 }
 
 // Settings structs for app configuration persisted to disk.

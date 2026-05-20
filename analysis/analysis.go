@@ -241,7 +241,7 @@ func (m *Manager) LoadPermissionsSignatures() []ApplePermissionSignature {
 
 	m.logger("Loading permissions signatures", "Manager.LoadPermissionsSignatures")
 	// Check if signatures file exists, if not fetch from GitHub
-	sigPath := filepath.Join("tmp", "ios_permissions.json")
+	sigPath := filepath.Join("assets", "ios_permissions.json")
 	if _, err := os.Stat(sigPath); os.IsNotExist(err) {
 		m.logger("Permission file not found, fetching from GitHub", "Manager.LoadPermissionsSignatures")
 		url := "https://raw.githubusercontent.com/Sicksyg/iOS_ProtectedResources/main/ios_ProtectedResources.json"
@@ -265,7 +265,7 @@ func (m *Manager) LoadPermissionsSignatures() []ApplePermissionSignature {
 	}
 
 	// Open the JSON file
-	signatures, err := os.Open(filepath.Join("tmp", "ios_permissions.json"))
+	signatures, err := os.Open(filepath.Join("assets", "ios_permissions.json"))
 	if err != nil {
 		m.logger("Error opening permissions signatures file: "+err.Error(), "Manager.LoadPermissionsSignatures")
 		return []ApplePermissionSignature{}
@@ -298,7 +298,7 @@ func (m *Manager) LoadPermissionsSignatures() []ApplePermissionSignature {
 	return applePermissionSignatures
 }
 
-func (m *Manager) AnalyseDetectPermissions(appPermissions map[string]string) (map[string]models.PermissionDetail, error) {
+func (m *Manager) AnalyseDetectPermissions(appPermissions map[string]string) (map[string]models.IosPermissionDetail, error) {
 	// Load permissions signatures from Apple
 	applePermissionSignatures := m.LoadPermissionsSignatures()
 
@@ -309,10 +309,10 @@ func (m *Manager) AnalyseDetectPermissions(appPermissions map[string]string) (ma
 	}
 
 	// Build enriched permissions map by cross-referencing with Apple signatures
-	enrichedPermissions := make(map[string]models.PermissionDetail)
+	enrichedPermissions := make(map[string]models.IosPermissionDetail)
 
 	for permKey, developerDesc := range appPermissions {
-		detail := models.PermissionDetail{
+		detail := models.IosPermissionDetail{
 			DeveloperDescription: developerDesc,
 		}
 
@@ -438,7 +438,7 @@ func (m *Manager) LoadSDKSignatures() []SDKSignature {
 
 	m.logger("Loading SDK signatures", "Manager.detectSDKs")
 	// Check if signatures file exists, if not fetch from GitHub
-	sigPath := filepath.Join("tmp", "ios_signatures.json")
+	sigPath := filepath.Join("assets", "ios_signatures.json")
 	if _, err := os.Stat(sigPath); os.IsNotExist(err) {
 		m.logger("SDK signatures file not found, fetching from GitHub", "Manager.LoadSDKSignatures")
 		url := "https://raw.githubusercontent.com/Sicksyg/iOS-SDK-Signatures/main/ios_signatures.json"
@@ -462,7 +462,7 @@ func (m *Manager) LoadSDKSignatures() []SDKSignature {
 	}
 
 	// Open the JSON file
-	signatures, err := os.Open(filepath.Join("tmp", "ios_signatures.json"))
+	signatures, err := os.Open(filepath.Join("assets", "ios_signatures.json"))
 	if err != nil {
 		m.logger("Error opening SDK signatures file: "+err.Error(), "Manager.LoadSDKSignatures")
 		return []SDKSignature{}
@@ -488,7 +488,7 @@ func (m *Manager) LoadSDKSignatures() []SDKSignature {
 }
 
 // RunCompleteAnalysis runs the full Frida analysis workflow: setup, permissions, static analysis, and SDK detection
-func (m *Manager) RunCompleteAnalysis(udid, bundleID string) (map[string]models.PermissionDetail, map[string][]string, error) {
+func (m *Manager) RunCompleteAnalysis(udid, bundleID string) (map[string]models.IosPermissionDetail, map[string][]string, error) {
 	// Step 1: Setup Frida
 	if err := m.FridaSetup(udid, bundleID); err != nil {
 		return nil, nil, fmt.Errorf("frida setup failed: %w", err)
@@ -524,7 +524,7 @@ func (m *Manager) RunCompleteAnalysis(udid, bundleID string) (map[string]models.
 	if err != nil {
 		m.logger("Permission enrichment failed: "+err.Error(), "Manager.RunCompleteAnalysis")
 		// Continue even if permission enrichment fails
-		enrichedPermissions = make(map[string]models.PermissionDetail)
+		enrichedPermissions = make(map[string]models.IosPermissionDetail)
 	}
 
 	m.logger("Complete analysis finished successfully", "Manager.RunCompleteAnalysis")

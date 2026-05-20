@@ -347,6 +347,12 @@ p {
     background: linear-gradient(135deg, var(--secondary), var(--secondary-container));
 }
 
+.btn.android.tertiary {
+    background: transparent;
+    border-color: rgba(0, 165, 114, 0.28);
+    color: var(--secondary);
+}
+
 .btn.neutral {
     color: var(--on-surface);
     border-color: rgba(158, 172, 200, 0.3);

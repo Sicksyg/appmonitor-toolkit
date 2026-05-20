@@ -41,6 +41,28 @@ type Manager struct {
 	logger func(message, function string)
 }
 
+// Input contains all data needed to generate a report.
+type Input struct {
+	ApplicationName     string
+	ApplicationBundleID string
+	AppStoreDescription string
+	AppStoreIconPath    string
+	AppStoreURL         string
+	OutPath             string
+	SDKMap              map[string][]string
+	Permissions         []PermissionItem
+}
+
+// PermissionItem is a platform-agnostic permission representation for report rendering.
+type PermissionItem struct {
+	Key                  string
+	DisplayName          string
+	SystemDescription    string
+	DeveloperDescription string
+	Category             string
+	SourceLabel          string
+}
+
 type newItemMap struct {
 	Name  string
 	Count int
@@ -194,8 +216,63 @@ func (rm *Manager) rowBuilder(itemMap map[string][]string) ([]core.Row, []string
 	return rows, names, nil
 }
 
+// IosPermissionItems converts iOS permissions into report PermissionItem entries.
+func IosPermissionItems(permissionMap map[string]models.IosPermissionDetail) []PermissionItem {
+	items := make([]PermissionItem, 0, len(permissionMap))
+	for key, detail := range permissionMap {
+		displayName := strings.TrimSpace(detail.CommonName)
+		if displayName == "" {
+			displayName = key
+		}
+
+		items = append(items, PermissionItem{
+			Key:                  key,
+			DisplayName:          displayName,
+			SystemDescription:    strings.TrimSpace(detail.AppleDescription),
+			DeveloperDescription: strings.TrimSpace(detail.DeveloperDescription),
+			Category:             strings.TrimSpace(detail.Category),
+			SourceLabel:          "Apple",
+		})
+	}
+
+	sort.Slice(items, func(i, j int) bool {
+		return strings.ToLower(items[i].DisplayName) < strings.ToLower(items[j].DisplayName)
+	})
+
+	return items
+}
+
+// AndroidPermissionItems converts Android permissions into report PermissionItem entries.
+func AndroidPermissionItems(permissionMap map[string]models.AndroidPermissionDetail) []PermissionItem {
+	items := make([]PermissionItem, 0, len(permissionMap))
+	for key, detail := range permissionMap {
+		displayName := strings.TrimSpace(detail.CommonName)
+		if displayName == "" {
+			displayName = key
+		}
+
+		items = append(items, PermissionItem{
+			Key:                  key,
+			DisplayName:          displayName,
+			SystemDescription:    strings.TrimSpace(detail.DescriptionSimple),
+			DeveloperDescription: strings.TrimSpace(detail.DescriptionDetailed),
+			Category:             strings.TrimSpace(detail.ProtectionLevel),
+			SourceLabel:          "Android",
+		})
+	}
+
+	sort.Slice(items, func(i, j int) bool {
+		return strings.ToLower(items[i].DisplayName) < strings.ToLower(items[j].DisplayName)
+	})
+
+	return items
+}
+
 // MakeMarotoReport generates a professional PDF report using Maroto v2
-func (rm *Manager) MakeMarotoReport(applicationName, applicationBundleID, appStoreDescription, appStoreIcon, appStoreURL, outPath string, sdkMap map[string][]string, permissionMap map[string]models.PermissionDetail) error {
+func (rm *Manager) MakeMarotoReport(input Input) error {
+	sdkMap := input.SDKMap
+	permissionItems := input.Permissions
+
 	// Create config
 	cfg := config.NewBuilder().
 		WithDimensions(210, 297).
@@ -210,14 +287,14 @@ func (rm *Manager) MakeMarotoReport(applicationName, applicationBundleID, appSto
 	// Build documents
 
 	// Front page
-	rm.buildHeader(mrt, applicationName, applicationBundleID, len(sdkMap))
-	rm.buildFrontPage(mrt, applicationName, applicationBundleID, appStoreDescription, appStoreIcon, appStoreURL, sdkMap, permissionMap)
+	rm.buildHeader(mrt, input.ApplicationName, input.ApplicationBundleID, len(sdkMap))
+	rm.buildFrontPage(mrt, input.ApplicationName, input.ApplicationBundleID, input.AppStoreDescription, input.AppStoreIconPath, input.AppStoreURL, sdkMap, permissionItems)
 	mrt.AddPages(page.New())
 
 	// Details pages
-	rm.buildHeader(mrt, applicationName, applicationBundleID, len(sdkMap))
+	rm.buildHeader(mrt, input.ApplicationName, input.ApplicationBundleID, len(sdkMap))
 	rm.buildSDKSection(mrt, sdkMap)
-	rm.buildPermissionsSection(mrt, permissionMap)
+	rm.buildPermissionsSection(mrt, permissionItems)
 	rm.buildFooter(mrt)
 
 	// Generate
@@ -227,11 +304,11 @@ func (rm *Manager) MakeMarotoReport(applicationName, applicationBundleID, appSto
 	}
 
 	// Save
-	if err := document.Save(outPath); err != nil {
+	if err := document.Save(input.OutPath); err != nil {
 		return fmt.Errorf("save pdf: %w", err)
 	}
 
-	rm.logger(fmt.Sprintf("PDF written to: %s", outPath), "report.Manager.MakeMarotoReport")
+	rm.logger(fmt.Sprintf("PDF written to: %s", input.OutPath), "report.Manager.MakeMarotoReport")
 	return nil
 }
 
@@ -268,19 +345,33 @@ func (rm *Manager) buildHeader(m core.Maroto, applicationName string, bundleID s
 	)
 }
 
-func (rm *Manager) buildFrontPage(m core.Maroto, applicationName, bundleID string, appStoreDescription string, appStoreIcon string, appStoreURL string, sdkMap map[string][]string, permissionMap map[string]models.PermissionDetail) {
+func (rm *Manager) buildFrontPage(m core.Maroto, applicationName, bundleID string, appStoreDescription string, appStoreIconPath string, appStoreURL string, sdkMap map[string][]string, permissions []PermissionItem) {
 	// Developer mod - Add border around every element for easier debugging
 
-	//icon := "./testicon.png" // Placeholder icon path - replace with actual app icon if available
+	fmt.Printf("App Store Icon Path: %s\n", appStoreIconPath)
+
+	//icon := "tmp/com.netflix.mediaclient_icon.png" // Placeholder icon path - replace with actual app icon if available
+
+	iconCol := col.New(3).Add(
+		text.New("No icon", props.Text{
+			Top:   16,
+			Size:  9,
+			Align: align.Center,
+			Color: &mediumGray,
+		}),
+	)
+	if strings.TrimSpace(appStoreIconPath) != "" {
+		iconCol = image.NewFromFileCol(3, appStoreIconPath, props.Rect{
+			Center:  true,
+			Percent: 80,
+		})
+	}
 
 	// Icon left and text about the app on the right
 	m.AddRows(
 		row.New(40).Add(
 			// First Column with icon
-			image.NewFromFileCol(3, appStoreIcon, props.Rect{
-				Center:  true,
-				Percent: 80,
-			}),
+			iconCol,
 			// Second Column with appStoreDescription text
 			col.New(9).Add(
 				text.New(applicationName, props.Text{
@@ -310,14 +401,14 @@ func (rm *Manager) buildFrontPage(m core.Maroto, applicationName, bundleID strin
 					Style: fontstyle.Bold,
 					Color: &professionalBlue,
 				}),
-			).WithStyle(&props.Cell{BackgroundColor: &cardBeige}),
+			),
 			col.New(6).Add(
-				text.New(fmt.Sprintf("Total Permissions: %d", len(permissionMap)), props.Text{
+				text.New(fmt.Sprintf("Total Permissions: %d", len(permissions)), props.Text{
 					Size:  14,
 					Style: fontstyle.Bold,
 					Color: &professionalBlue,
 				}),
-			).WithStyle(&props.Cell{BackgroundColor: &cardBeige}),
+			),
 		),
 	)
 
@@ -327,9 +418,13 @@ func (rm *Manager) buildFrontPage(m core.Maroto, applicationName, bundleID strin
 	}
 	sort.Strings(sdkNames)
 
-	permissionNames := make([]string, 0, len(permissionMap))
-	for permission := range permissionMap {
-		permissionNames = append(permissionNames, permission)
+	permissionNames := make([]string, 0, len(permissions))
+	for _, permission := range permissions {
+		displayName := strings.TrimSpace(permission.DisplayName)
+		if displayName == "" {
+			displayName = strings.TrimSpace(permission.Key)
+		}
+		permissionNames = append(permissionNames, displayName)
 	}
 	sort.Strings(permissionNames)
 
@@ -341,20 +436,20 @@ func (rm *Manager) buildFrontPage(m core.Maroto, applicationName, bundleID strin
 	m.AddRow(7,
 		col.New(6).Add(
 			text.New("SDKs Detected:", props.Text{Size: 10, Style: fontstyle.Bold, Color: &darkCharcoal}),
-		).WithStyle(&props.Cell{BackgroundColor: &cardBeige}),
+		),
 		col.New(6).Add(
 			text.New("Permissions Detected:", props.Text{Size: 10, Style: fontstyle.Bold, Color: &darkCharcoal}),
-		).WithStyle(&props.Cell{BackgroundColor: &cardBeige}),
+		),
 	)
 
 	if maxRows == 0 {
 		m.AddRow(7,
 			col.New(6).Add(
 				text.New("None", props.Text{Size: 10, Color: &mediumGray}),
-			).WithStyle(&props.Cell{BackgroundColor: &cardBeige}),
+			),
 			col.New(6).Add(
 				text.New("None", props.Text{Size: 10, Color: &mediumGray}),
-			).WithStyle(&props.Cell{BackgroundColor: &cardBeige}),
+			),
 		)
 		return
 	}
@@ -368,21 +463,16 @@ func (rm *Manager) buildFrontPage(m core.Maroto, applicationName, bundleID strin
 
 		permissionText := ""
 		if i < len(permissionNames) {
-			permissionName := permissionNames[i]
-			commonName := strings.TrimSpace(permissionMap[permissionName].CommonName)
-			if commonName == "" {
-				commonName = permissionName
-			}
-			permissionText = fmt.Sprintf("• %s", commonName)
+			permissionText = fmt.Sprintf("• %s", permissionNames[i])
 		}
 
 		m.AddRow(7,
 			col.New(6).Add(
 				text.New(sdkText, props.Text{Size: 10, Color: &mediumGray}),
-			).WithStyle(&props.Cell{BackgroundColor: &cardBeige}),
+			),
 			col.New(6).Add(
 				text.New(permissionText, props.Text{Size: 10, Color: &mediumGray}),
-			).WithStyle(&props.Cell{BackgroundColor: &cardBeige}),
+			),
 		)
 	}
 }
@@ -448,7 +538,7 @@ func (rm *Manager) buildSDKSection(m core.Maroto, sdkMap map[string][]string) {
 	}
 }
 
-func (rm *Manager) buildPermissionsSection(m core.Maroto, permissionMap map[string]models.PermissionDetail) {
+func (rm *Manager) buildPermissionsSection(m core.Maroto, permissions []PermissionItem) {
 	// Add section header
 	m.AddRows(
 		row.New(5),
@@ -465,7 +555,7 @@ func (rm *Manager) buildPermissionsSection(m core.Maroto, permissionMap map[stri
 		row.New(2),
 	)
 
-	if len(permissionMap) == 0 {
+	if len(permissions) == 0 {
 		m.AddRow(15,
 			col.New(12).Add(
 				text.New("No permissions detected", props.Text{
@@ -478,22 +568,20 @@ func (rm *Manager) buildPermissionsSection(m core.Maroto, permissionMap map[stri
 		return
 	}
 
-	permissionNames := make([]string, 0, len(permissionMap))
-	for permission := range permissionMap {
-		permissionNames = append(permissionNames, permission)
-	}
-	sort.Strings(permissionNames)
-
-	for i, permission := range permissionNames {
-		detail := permissionMap[permission]
+	for i, permission := range permissions {
 		bgColor := &props.WhiteColor
 		if i%2 == 0 {
 			bgColor = &veryLightGray
 		}
 
+		title := strings.TrimSpace(permission.DisplayName)
+		if title == "" {
+			title = strings.TrimSpace(permission.Key)
+		}
+
 		m.AddRow(8,
 			col.New(12).Add(
-				text.New(fmt.Sprintf(" %s", detail.CommonName), props.Text{
+				text.New(fmt.Sprintf(" %s", title), props.Text{
 					Size:  11,
 					Style: fontstyle.Bold,
 					Color: &mediumGray,
@@ -502,29 +590,36 @@ func (rm *Manager) buildPermissionsSection(m core.Maroto, permissionMap map[stri
 			),
 		).WithStyle(&props.Cell{BackgroundColor: bgColor})
 
-		m.AddRows(
-			row.New(6).Add(
+		if permission.SystemDescription != "" {
+			label := strings.TrimSpace(permission.SourceLabel)
+			if label == "" {
+				label = "System"
+			}
+			m.AddRow(6,
 				col.New(12).Add(
-					text.New(wrapText(fmt.Sprintf("Apple: %s", detail.AppleDescription), 100), props.Text{
+					text.New(wrapText(fmt.Sprintf("%s: %s", label, permission.SystemDescription), 100), props.Text{
 						Size: 9,
 						Left: 5,
 					}),
 				),
-			),
-			row.New(6).Add(
-				col.New(12).Add(
-					text.New(wrapText(fmt.Sprintf("Developer: %s", detail.DeveloperDescription), 100), props.Text{
-						Size: 9,
-						Left: 5,
-					}),
-				),
-			),
-		)
+			)
+		}
 
-		if detail.Category != "" {
+		if permission.DeveloperDescription != "" {
+			m.AddRow(6,
+				col.New(12).Add(
+					text.New(wrapText(fmt.Sprintf("Developer: %s", permission.DeveloperDescription), 100), props.Text{
+						Size: 9,
+						Left: 5,
+					}),
+				),
+			)
+		}
+
+		if permission.Category != "" {
 			m.AddRow(4,
 				col.New(12).Add(
-					text.New(fmt.Sprintf("Category: %s", detail.Category), props.Text{
+					text.New(fmt.Sprintf("Category: %s", permission.Category), props.Text{
 						Size: 8,
 						Left: 5,
 					}),

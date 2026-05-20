@@ -74,7 +74,7 @@
                         <tr v-for="item in results" :key="`${item.trackId}-${item.bundleId}`" class="result-row"
                             @click="handleSelectItem(item)">
                             <td>
-                                <img v-if="item.artworkUrl60" :src="item.artworkUrl60" :alt="`${item.trackName} logo`"
+                                <img v-if="item.artworkUrl100" :src="item.artworkUrl100" :alt="`${item.trackName} logo`"
                                     class="result-logo" />
                             </td>
                             <td>{{ item.trackName }}</td>
@@ -133,7 +133,7 @@
 <script setup>
 import { onBeforeUnmount, onMounted, ref, computed } from 'vue'
 import { EventsOn, EventsOff, ClipboardSetText } from '../../wailsjs/runtime/runtime'
-import { LoadAppList, LoadFromPhone, SearchWild, SelectItem, StartAnalysis, OpenReportFileInDefaultApp } from '../../wailsjs/go/main/App'
+import { LoadAppList, LoadFromPhone, ItunesSearchWild, SelectItem, StartIosAnalysis, OpenReportFileInDefaultApp } from '../../wailsjs/go/main/App'
 import AppIcon from '../components/AppIcon.vue'
 
 // --- State ---
@@ -225,7 +225,7 @@ async function handleSearchWild() {
     loading.value = true
     resultsMessage.value = 'Searching...'
     try {
-        const raw = await SearchWild(searchTerm.value.trim())
+        const raw = await ItunesSearchWild(searchTerm.value.trim())
         results.value = parseResults(raw)
         resultsMessage.value = results.value.length ? '' : 'No results found.'
     } catch (error) {
@@ -277,7 +277,7 @@ function handleStartAnalysis() {
     analysisHasRun.value = false
     statusMessage.value = ''
     analysisPercent.value = 0
-    StartAnalysis().catch((error) => {
+    StartIosAnalysis().catch((error) => {
         console.error(error)
         statusMessage.value = 'Failed to start analysis.'
         analysisHasRun.value = true

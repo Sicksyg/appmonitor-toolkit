@@ -14,11 +14,11 @@ import (
 )
 
 type runResult struct {
-	BundleID    string                             `json:"bundleId"`
-	UDID        string                             `json:"udid"`
-	Timestamp   string                             `json:"timestamp"`
-	Permissions map[string]models.PermissionDetail `json:"permissions"`
-	SDKs        map[string][]string                `json:"sdks"`
+	BundleID    string                                `json:"bundleId"`
+	UDID        string                                `json:"udid"`
+	Timestamp   string                                `json:"timestamp"`
+	Permissions map[string]models.IosPermissionDetail `json:"permissions"`
+	SDKs        map[string][]string                   `json:"sdks"`
 }
 
 func main() {

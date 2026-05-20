@@ -230,25 +230,74 @@ func (m *Manager) DownloadAndInstall(udid, bundleID string, email, password stri
 	m.InstallApp(udid, installPath)
 }
 
-func (m *Manager) DownloadAndSaveAppIcon(url string, bundleID string) (string, error) {
+func (m *Manager) DownloadAndSaveAppIcon(url string, bundleID string) string {
 	// Download the app icon from the provided URL and save it to a temporary location
+	fmt.Printf("Downloading app icon from URL: %s\n", url)
 	resp, err := http.Get(url)
 	if err != nil {
-		return "", fmt.Errorf("failed to download app icon: %v", err)
+		fmt.Errorf("failed to download app icon: %v", err)
 	}
 	defer resp.Body.Close()
 
-	iconPath := fmt.Sprintf("tmp/%s_icon.png", bundleID)
+	suffix := url[strings.LastIndex(url, "."):]
+
+	iconPath := fmt.Sprintf("tmp/%s_icon%s", bundleID, suffix)
 	outFile, err := os.Create(iconPath)
 	if err != nil {
-		return "", fmt.Errorf("failed to create icon file: %v", err)
+		fmt.Errorf("failed to create icon file: %v", err)
 	}
 	defer outFile.Close()
 
 	_, err = io.Copy(outFile, resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("failed to save app icon: %v", err)
+		fmt.Errorf("failed to save app icon: %v", err)
 	}
 
-	return iconPath, nil
+	fmt.Printf("App icon saved to: %s\n", iconPath)
+
+	return iconPath
+}
+
+// OpenFile opens a file dialog
+func (m *Manager) LoadIpaFile() string {
+	// This function opens a file dialog to select an IPA file for install and analysis
+	m.logger("Opening file dialog", "helpers.Manager.LoadIpaFile")
+	filePath, err := runtime.OpenFileDialog(m.ctx, runtime.OpenDialogOptions{
+		Title:            "Select a file",
+		DefaultDirectory: "./tmp/",
+		Filters: []runtime.FileFilter{
+			{
+				DisplayName: "IPA Files",
+				Pattern:     "*.ipa",
+			},
+		},
+	})
+	if err != nil {
+		fmt.Println("Failed to open file dialog:", err)
+		return ""
+	}
+
+	return filePath
+}
+
+func (m *Manager) LoadAppList() string {
+	// This function loads a list of apps from a CSV file and returns the content as an ordered list
+	m.logger("Loading app list", "helpers.Manager.LoadAppList")
+	filePath, err := runtime.OpenFileDialog(m.ctx, runtime.OpenDialogOptions{
+		Title:            "Select a file",
+		DefaultDirectory: "./tmp/",
+		Filters: []runtime.FileFilter{
+			{
+				DisplayName: "CSV Files",
+				Pattern:     "*.csv",
+			},
+		},
+	})
+	if err != nil {
+		fmt.Println("Failed to open file dialog:", err)
+		return ""
+	}
+	fmt.Println("Selected file:", filePath)
+
+	return filePath
 }
