@@ -8,6 +8,7 @@ node_modules
 # Test and temporary files
 test_files/
 tmp/
+output/
 
 # App config (contains user-specific paths and credentials)
 settings.json

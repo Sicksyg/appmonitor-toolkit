@@ -95,6 +95,14 @@ func NewManager(logger func(message, function string)) *Manager {
 	}
 }
 
+func cutText(text string, maxLength int) string {
+	runes := []rune(text)
+	if len(runes) <= maxLength {
+		return text
+	}
+	return string(runes[:maxLength])
+}
+
 // wrapText wraps text to fit within a specified width (character limit)
 func wrapText(text string, maxCharsPerLine int) string {
 	if len(text) <= maxCharsPerLine {
@@ -108,10 +116,12 @@ func wrapText(text string, maxCharsPerLine int) string {
 	for _, word := range words {
 		if len(line)+len(word)+1 > maxCharsPerLine {
 			if line != "" {
-				result.WriteString(line + "\n")
+				result.WriteString(line)
+				result.WriteString("\n")
 				line = word
 			} else {
-				result.WriteString(word + "\n")
+				result.WriteString(word)
+				result.WriteString("\n")
 				line = ""
 			}
 		} else {
@@ -162,10 +172,12 @@ func wrapTextLong(text string, maxCharsPerLine int, maxLength int) string {
 	for _, word := range words {
 		if len(line)+len(word)+1 > maxCharsPerLine {
 			if line != "" {
-				result.WriteString(line + "\n")
+				result.WriteString(line)
+				result.WriteString("\n")
 				line = word
 			} else {
-				result.WriteString(word + "\n")
+				result.WriteString(word)
+				result.WriteString("\n")
 				line = ""
 			}
 		} else {
@@ -182,6 +194,21 @@ func wrapTextLong(text string, maxCharsPerLine int, maxLength int) string {
 	}
 
 	return result.String()
+}
+
+func dynamicRowHeight(wrappedText string, minHeight int, perLine int) float64 {
+	lineCount := 1
+	trimmed := strings.TrimSpace(wrappedText)
+	if trimmed != "" {
+		lineCount = strings.Count(trimmed, "\n") + 1
+	}
+
+	height := lineCount * perLine
+	if height < minHeight {
+		return float64(minHeight)
+	}
+
+	return float64(height)
 }
 
 // Function to build SDK and Permissions list for front page summary and details section. Returns rows, sorted names, and error if any.
@@ -208,7 +235,7 @@ func (rm *Manager) rowBuilder(itemMap map[string][]string) ([]core.Row, []string
 		})
 	}
 
-	rows, err := list.Build[newItemMap](items)
+	rows, err := list.Build(items)
 	if err != nil {
 		return nil, names, err
 	}
@@ -292,7 +319,6 @@ func (rm *Manager) MakeMarotoReport(input Input) error {
 	mrt.AddPages(page.New())
 
 	// Details pages
-	rm.buildHeader(mrt, input.ApplicationName, input.ApplicationBundleID, len(sdkMap))
 	rm.buildSDKSection(mrt, sdkMap)
 	rm.buildPermissionsSection(mrt, permissionItems)
 	rm.buildFooter(mrt)
@@ -312,10 +338,10 @@ func (rm *Manager) MakeMarotoReport(input Input) error {
 	return nil
 }
 
-// buildHeader creates a consistent header for each page with the application name and report title
+// buildHeader registers a consistent header for each page with the application name and report title
 func (rm *Manager) buildHeader(m core.Maroto, applicationName string, bundleID string, sdkCount int) {
-	m.AddRows(
-		row.New(20).Add(
+	if err := m.RegisterHeader(
+		row.New(15).Add(
 			col.New(12).Add(
 				text.New(fmt.Sprintf("AppMonitor Analysis Report: %s", applicationName), props.Text{
 					Top:   6,
@@ -342,13 +368,15 @@ func (rm *Manager) buildHeader(m core.Maroto, applicationName string, bundleID s
 			),
 		),
 		row.New(2),
-	)
+	); err != nil {
+		rm.logger(fmt.Sprintf("unable to register report header: %v", err), "report.Manager.buildHeader")
+	}
 }
 
 func (rm *Manager) buildFrontPage(m core.Maroto, applicationName, bundleID string, appStoreDescription string, appStoreIconPath string, appStoreURL string, sdkMap map[string][]string, permissions []PermissionItem) {
 	// Developer mod - Add border around every element for easier debugging
 
-	fmt.Printf("App Store Icon Path: %s\n", appStoreIconPath)
+	//fmt.Printf("App Store Icon Path: %s\n", appStoreIconPath)
 
 	//icon := "tmp/com.netflix.mediaclient_icon.png" // Placeholder icon path - replace with actual app icon if available
 
@@ -369,7 +397,7 @@ func (rm *Manager) buildFrontPage(m core.Maroto, applicationName, bundleID strin
 
 	// Icon left and text about the app on the right
 	m.AddRows(
-		row.New(40).Add(
+		row.New(60).Add(
 			// First Column with icon
 			iconCol,
 			// Second Column with appStoreDescription text
@@ -380,10 +408,26 @@ func (rm *Manager) buildFrontPage(m core.Maroto, applicationName, bundleID strin
 					Style: fontstyle.Bold,
 					Color: &darkCharcoal,
 				}),
-				text.New(wrapTextLong(appStoreDescription, 60, 300), props.Text{
+				text.New(wrapTextLong(appStoreDescription, 60, 400), props.Text{
 					Top:   20,
 					Size:  10,
 					Color: &mediumGray,
+				}),
+			),
+		).WithStyle(&props.Cell{BackgroundColor: &panelOffWhite}),
+
+		row.New(12).Add(
+			col.New(12).Add(
+				text.New(appStoreURL, props.Text{
+					Size:  9,
+					Left:  2,
+					Color: &professionalBlue,
+				}),
+				text.New(bundleID, props.Text{
+					Top:   8,
+					Size:  9,
+					Left:  2,
+					Color: &professionalBlue,
 				}),
 			),
 		).WithStyle(&props.Cell{BackgroundColor: &panelOffWhite}),
@@ -525,7 +569,7 @@ func (rm *Manager) buildSDKSection(m core.Maroto, sdkMap map[string][]string) {
 		for _, className := range sdkMap[sdk] {
 			m.AddRow(5,
 				col.New(12).Add(
-					text.New(fmt.Sprintf("  - %s", className), props.Text{
+					text.New(fmt.Sprintf("  - %s", cutText(className, 40)), props.Text{
 						Size:  8,
 						Left:  4,
 						Color: &mediumGray,
@@ -578,10 +622,11 @@ func (rm *Manager) buildPermissionsSection(m core.Maroto, permissions []Permissi
 		if title == "" {
 			title = strings.TrimSpace(permission.Key)
 		}
+		wrappedTitle := wrapText(fmt.Sprintf(" %s", title), 80)
 
-		m.AddRow(8,
+		m.AddRow(dynamicRowHeight(wrappedTitle, 8, 5),
 			col.New(12).Add(
-				text.New(fmt.Sprintf(" %s", title), props.Text{
+				text.New(wrappedTitle, props.Text{
 					Size:  11,
 					Style: fontstyle.Bold,
 					Color: &mediumGray,
@@ -595,9 +640,10 @@ func (rm *Manager) buildPermissionsSection(m core.Maroto, permissions []Permissi
 			if label == "" {
 				label = "System"
 			}
-			m.AddRow(6,
+			systemText := wrapText(fmt.Sprintf("%s: %s", label, permission.SystemDescription), 100)
+			m.AddRow(dynamicRowHeight(systemText, 6, 4),
 				col.New(12).Add(
-					text.New(wrapText(fmt.Sprintf("%s: %s", label, permission.SystemDescription), 100), props.Text{
+					text.New(systemText, props.Text{
 						Size: 9,
 						Left: 5,
 					}),
@@ -606,9 +652,10 @@ func (rm *Manager) buildPermissionsSection(m core.Maroto, permissions []Permissi
 		}
 
 		if permission.DeveloperDescription != "" {
-			m.AddRow(6,
+			developerText := wrapText(fmt.Sprintf("Developer: %s", permission.DeveloperDescription), 100)
+			m.AddRow(dynamicRowHeight(developerText, 6, 4),
 				col.New(12).Add(
-					text.New(wrapText(fmt.Sprintf("Developer: %s", permission.DeveloperDescription), 100), props.Text{
+					text.New(developerText, props.Text{
 						Size: 9,
 						Left: 5,
 					}),
@@ -617,9 +664,10 @@ func (rm *Manager) buildPermissionsSection(m core.Maroto, permissions []Permissi
 		}
 
 		if permission.Category != "" {
-			m.AddRow(4,
+			categoryText := wrapText(fmt.Sprintf("Category: %s", permission.Category), 100)
+			m.AddRow(dynamicRowHeight(categoryText, 4, 4),
 				col.New(12).Add(
-					text.New(fmt.Sprintf("Category: %s", permission.Category), props.Text{
+					text.New(categoryText, props.Text{
 						Size: 8,
 						Left: 5,
 					}),

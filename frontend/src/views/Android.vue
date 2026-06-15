@@ -30,6 +30,13 @@
             </div>
 
             <p class="status-line" v-if="statusMessage">{{ statusMessage }}</p>
+
+            <p class="status-line" v-if="statusMessage === 'Analysis complete'">The analysis is complete. You can now
+                open the generated report.</p>
+            <div class="action-row" v-if="statusMessage === 'Analysis complete'">
+                <button class="btn primary" type="button" @click="openReport">Open Report</button>
+
+            </div>
         </section>
 
         <section class="glass-panel results-panel">
@@ -71,7 +78,7 @@
 <script setup>
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
-import { SearchGooglePlay, SelectItem, StartAndroidAnalysis, LoadAppList } from '../../wailsjs/go/main/App'
+import { SearchGooglePlay, SelectItem, StartAndroidAnalysis, LoadAppList, OpenReportFileInDefaultApp } from '../../wailsjs/go/main/App'
 import AppIcon from '../components/AppIcon.vue'
 
 const searchTerm = ref('')
@@ -140,6 +147,17 @@ function handleLoadAppList() {
         statusMessage.value = 'Failed to load app list.'
     })
 }
+
+// Opens the generated report in the default browser
+async function openReport() {
+    try {
+        await OpenReportFileInDefaultApp()
+    } catch (error) {
+        console.error('Failed to open report:', error)
+        statusMessage.value = 'Failed to open report.'
+    }
+}
+
 
 onMounted(() => {
     EventsOn('analysisStatus', (status) => {

@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"AppMonitor/analysis"
+	ios "AppMonitor/analysis"
 	"AppMonitor/models"
 )
 
@@ -40,7 +40,7 @@ func main() {
 		log.Printf("%s: %s", function, message)
 	}
 
-	mgr := analysis.NewManager(logger)
+	mgr := ios.NewManager(logger)
 	defer func() {
 		if err := mgr.Cleanup(); err != nil {
 			log.Printf("cleanup warning: %v", err)

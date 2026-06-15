@@ -232,28 +232,37 @@ func (m *Manager) DownloadAndInstall(udid, bundleID string, email, password stri
 
 func (m *Manager) DownloadAndSaveAppIcon(url string, bundleID string) string {
 	// Download the app icon from the provided URL and save it to a temporary location
-	fmt.Printf("Downloading app icon from URL: %s\n", url)
+	m.logger(fmt.Sprintf("Downloading app icon from URL: %s", url), "helpers.Manager.DownloadAndSaveAppIcon")
 	resp, err := http.Get(url)
 	if err != nil {
-		fmt.Errorf("failed to download app icon: %v", err)
+		m.logger(fmt.Sprintf("failed to download app icon: %v", err), "helpers.Manager.DownloadAndSaveAppIcon")
 	}
 	defer resp.Body.Close()
 
-	suffix := url[strings.LastIndex(url, "."):]
+	// append suffix to the icon file based on the URL extension
+	suffix := ""
+	switch {
+	case strings.HasSuffix(url, ".png"):
+		suffix += ".png"
+	case strings.HasSuffix(url, ".jpg"), strings.HasSuffix(url, ".jpeg"):
+		suffix += ".jpg"
+	default:
+		suffix += ".png" // Default to PNG if no extension found
+	}
 
 	iconPath := fmt.Sprintf("tmp/%s_icon%s", bundleID, suffix)
 	outFile, err := os.Create(iconPath)
 	if err != nil {
-		fmt.Errorf("failed to create icon file: %v", err)
+		m.logger(fmt.Sprintf("failed to create icon file: %v", err), "helpers.Manager.DownloadAndSaveAppIcon")
 	}
 	defer outFile.Close()
 
 	_, err = io.Copy(outFile, resp.Body)
 	if err != nil {
-		fmt.Errorf("failed to save app icon: %v", err)
+		m.logger(fmt.Sprintf("failed to save app icon: %v", err), "helpers.Manager.DownloadAndSaveAppIcon")
 	}
 
-	fmt.Printf("App icon saved to: %s\n", iconPath)
+	m.logger(fmt.Sprintf("App icon saved to: %s", iconPath), "helpers.Manager.DownloadAndSaveAppIcon")
 
 	return iconPath
 }

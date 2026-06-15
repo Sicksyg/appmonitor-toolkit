@@ -12,12 +12,26 @@ type IosPermissionDetail struct {
 
 // AndroidPermissionDetail struct to hold enriched permission information for Android apps
 type AndroidPermissionDetail struct {
-	pkey                string `json:"pkey"`
+	PKey                string `json:"pkey"`
 	CommonName          string `json:"commonName"`
 	DescriptionSimple   string `json:"descriptionSimple"`
 	DescriptionDetailed string `json:"descriptionDetailed"`
 	ProtectionLevel     string `json:"protectionLevel,omitempty"`
 	Link                string `json:"link,omitempty"`
+}
+
+// AndroidSdkDetail struct to hold enriched information about Android SDKs, used for both analysis and reporting
+type AndroidSdkDetail struct {
+	ID            int      `json:"id"`
+	Name          string   `json:"name"`
+	Website       string   `json:"website"`
+	CodeSignature string   `json:"code_signature"`
+	Documentation []string `json:"documentation"`
+}
+
+// ExodusTrackerFile struct to represent the structure of the Exodus tracker data file. This allows for easy loading and access.
+type ExodusTrackerFile struct {
+	Trackers map[string]AndroidSdkDetail `json:"trackers"`
 }
 
 // Settings structs for app configuration persisted to disk.

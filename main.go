@@ -15,6 +15,8 @@ var icon []byte
 //go:embed all:frontend/dist
 var assets embed.FS
 
+// All other assets are embedded in their respective packages (analysis and android) from the assets directory - embed.go
+
 func main() {
 	// Create an instance of the app structure
 	app := NewApp()

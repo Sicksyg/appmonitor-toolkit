@@ -14,10 +14,10 @@ import (
 
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
-	"AppMonitor/analysis"
 	"AppMonitor/android"
 	"AppMonitor/appstores"
 	"AppMonitor/helpers"
+	"AppMonitor/ios"
 	"AppMonitor/models"
 	"AppMonitor/report"
 )
@@ -29,7 +29,7 @@ func NewApp() *App {
 	}
 	app.reportMgr = report.NewManager(app.Log)
 	app.appstoresMgr = appstores.NewManager(app.Log)
-	app.analysisMgr = analysis.NewManager(app.Log)
+	app.analysisMgr = ios.NewManager(app.Log)
 	app.androidMgr = android.NewManager(app.Log)
 	return app
 }
@@ -44,7 +44,7 @@ type App struct {
 	reportMgr    *report.Manager
 	appstoresMgr *appstores.Manager
 	helpersMgr   *helpers.Manager
-	analysisMgr  *analysis.Manager
+	analysisMgr  *ios.Manager
 	androidMgr   *android.Manager
 	settings     models.Settings
 	settingsPath string
@@ -166,7 +166,7 @@ func (a *App) SetupWorkspace() {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.helpersMgr = helpers.NewManager(a.Log, ctx)
-	a.analysisMgr = analysis.NewManager(a.Log)
+	a.analysisMgr = ios.NewManager(a.Log)
 	a.appstoresMgr = appstores.NewManager(a.Log)
 	a.androidMgr = android.NewManager(a.Log)
 
@@ -259,6 +259,9 @@ func (a *App) StartIosAnalysis() {
 	a.appinfo.ResultsPath = reportPath
 	a.emitStatus("done", "Analysis complete", 100)
 	a.Log("Analysis complete! Report saved to: "+reportPath, "App.StartAnalysis")
+
+	// push to database
+
 }
 
 // ------------------------- Main Android analysis flow ----------------------- //
@@ -280,7 +283,10 @@ func (a *App) StartAndroidAnalysis() {
 	}
 
 	a.appinfo.AndroidPermissions = permissions
-	a.appinfo.SDKs = sdks
+	a.appinfo.SDKs = map[string][]string{"Android": make([]string, 0)}
+	for _, sdk := range sdks {
+		a.appinfo.SDKs["Android"] = append(a.appinfo.SDKs["Android"], sdk.Name)
+	}
 
 	time.Sleep(time.Second * 2)
 
@@ -372,7 +378,7 @@ func (a *App) SelectItem(trackName string, trackId int, bundleId string, artwork
 
 	a.appinfo.AppStoreIconPath = a.helpersMgr.DownloadAndSaveAppIcon(artworkUrl, bundleId)
 
-	a.Log(fmt.Sprintf("App info updated:\n  Name: %s\n  BundleID: %s\n  ArtworkUrl: %s\n  SellerName: %s\n  ArtistViewUrl: %s\n  Description: %s", a.appinfo.Name, a.appinfo.BundleID, a.appinfo.ArtworkUrl, a.appinfo.SellerName, a.appinfo.ArtistViewUrl, a.appinfo.Description), "App.SelectItem")
+	// a.Log(fmt.Sprintf("App info updated:\n  Name: %s\n  BundleID: %s\n  ArtworkUrl: %s\n  SellerName: %s\n  ArtistViewUrl: %s\n  Description: %s", a.appinfo.Name, a.appinfo.BundleID, a.appinfo.ArtworkUrl, a.appinfo.SellerName, a.appinfo.ArtistViewUrl, a.appinfo.Description), "App.SelectItem")
 }
 
 func (a *App) OpenUrl(url string) {
@@ -488,4 +494,55 @@ func (a *App) LoadAppList() string {
 	fmt.Println("Selected file:", filePath)
 
 	return filePath
+}
+
+func (a *App) CreateAndPushToDatabase() {
+
+	// Creaste a database json file with results from analysis (AppInfo struct) if it doesn't exist
+	dbPath := filepath.Join("output", "database", "database.json")
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+			a.Log("Error creating database directory: "+err.Error(), "App.CreateAndPushToDatabase")
+			return
+		}
+		initialData := make(map[string]AppInfo)
+		initialBytes, err := json.MarshalIndent(initialData, "", "  ")
+		if err != nil {
+			a.Log("Error creating initial database JSON: "+err.Error(), "App.CreateAndPushToDatabase")
+			return
+		}
+		if err = os.WriteFile(dbPath, initialBytes, 0644); err != nil {
+			a.Log("Error writing initial database file: "+err.Error(), "App.CreateAndPushToDatabase")
+			return
+		}
+		a.Log("Created new database file at: "+dbPath, "App.CreateAndPushToDatabase")
+	}
+
+	// Load existing database
+	dbFile, err := os.ReadFile(dbPath)
+	if err != nil {
+		a.Log("Error reading database file: "+err.Error(), "App.CreateAndPushToDatabase")
+		return
+	}
+
+	var database map[string]AppInfo
+	if err = json.Unmarshal(dbFile, &database); err != nil {
+		a.Log("Error parsing database file: "+err.Error(), "App.CreateAndPushToDatabase")
+		return
+	}
+
+	// Add current app info to database
+	database[a.appinfo.BundleID] = a.appinfo
+
+	// Save updated database to disk
+	dbBytes, err := json.MarshalIndent(database, "", "  ")
+	if err != nil {
+		a.Log("Error encoding database JSON: "+err.Error(), "App.CreateAndPushToDatabase")
+		return
+	}
+	if err = os.WriteFile(dbPath, dbBytes, 0644); err != nil {
+		a.Log("Error writing database file: "+err.Error(), "App.CreateAndPushToDatabase")
+		return
+	}
+	a.Log("App info added to database for bundle ID: "+a.appinfo.BundleID, "App.CreateAndPushToDatabase")
 }
