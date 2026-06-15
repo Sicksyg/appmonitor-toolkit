@@ -668,7 +668,7 @@ func (rm *Manager) buildPermissionsSection(m core.Maroto, permissions []Permissi
 			m.AddRow(dynamicRowHeight(categoryText, 4, 4),
 				col.New(12).Add(
 					text.New(categoryText, props.Text{
-						Size: 8,
+						Size: 9,
 						Left: 5,
 					}),
 				),
