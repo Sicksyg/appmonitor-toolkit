@@ -23,6 +23,17 @@
                 <button class="btn ios" type="button" @click="save">Save</button>
                 <span v-if="saveStatus" class="save-status">{{ saveStatus }}</span>
             </div>
+
+            <!-- Spacer -->
+            <div class="spacer"></div>
+
+            <header class="view-header">
+                <h3>ReAuthenticate Apple AppStore</h3>
+                <p>Forces re-authentication with AppleID credentials.</p>
+            </header>
+            <div class="action-row">
+                <button class="btn ios" type="button" @click="reAuthenticateAppleID">ReAuthenticate</button>
+            </div>
         </section>
 
 
@@ -119,6 +130,7 @@
 import { ref, onMounted } from 'vue'
 import { GetSettings, SaveSettings } from '../../wailsjs/go/main/App'
 import { SetReportSavePath, OpenSettingsDir } from '../../wailsjs/go/main/App'
+import { AuthenticateAppleID } from '../../wailsjs/go/main/App'
 
 const settings = ref({
     auth: { AppleEmail: '', ApplePassword: '' },
@@ -165,6 +177,17 @@ async function openSettingsDir() {
         await OpenSettingsDir()
     } catch (error) {
         console.error('Error opening settings directory:', error)
+    }
+}
+
+async function reAuthenticateAppleID() {
+    try {
+        await AuthenticateAppleID(settings.value.auth.AppleEmail, settings.value.auth.ApplePassword)
+        saveStatus.value = 'Re-authenticated'
+        setTimeout(() => { saveStatus.value = '' }, 2000)
+    } catch (error) {
+        saveStatus.value = 'Error re-authenticating'
+        console.error('Error re-authenticating Apple ID:', error)
     }
 }
 

@@ -158,15 +158,39 @@ func (m *Manager) GetInstalledApps(udid string) []InstalledApp {
 	return programs
 }
 
+// Helper function to Authenticate with Apple ID using ipatool
+func (m *Manager) AuthenticateAppleID(email string, password string) {
+	m.logger("Authenticating Apple ID: "+email, "helpers.Manager.AuthenticateAppleID")
+
+	// Create object to run and capture output from ipatool.
+	ipatoolAuthCMD := exec.Command("ipatool", "auth", "login", "--email", email, "--password", password)
+	ipatoolAuthCMD.Start()
+
+	// Set up pipes to capture stdout and stderr
+	ipatoolOut, _ := ipatoolAuthCMD.StdoutPipe()
+	ipatoolErr, _ := ipatoolAuthCMD.StderrPipe()
+
+	// Read output and error streams
+	outputBytes, _ := io.ReadAll(ipatoolOut)
+	errorBytes, _ := io.ReadAll(ipatoolErr)
+
+	// Log authentication output and errors
+	m.logger("Authentication output: "+string(outputBytes), "helpers.Manager.AuthenticateAppleID")
+	if len(errorBytes) > 0 {
+		m.logger("Authentication error: "+string(errorBytes), "helpers.Manager.AuthenticateAppleID")
+	}
+
+	ipatoolAuthCMD.Wait()
+}
+
 // Helper function to download an IPA from the App Store using ipatool
 func (m *Manager) DownloadApp(bundleID string, email string, password string) {
 	m.logger("Downloading app with bundleID: "+bundleID, "helpers.Manager.DownloadApp")
 
 	installPath := "tmp/" + bundleID + ".ipa"
 
-	ipatoolAuthCMD := exec.Command("ipatool", "auth", "login", "--email", email, "--password", password)
-	ipatoolAuthCMD.Start()
-	ipatoolAuthCMD.Wait()
+	// authenticate with Apple ID before downloading
+	m.AuthenticateAppleID(email, password)
 
 	// Create object to run and capture output from ipatool.
 	ipatoolCMD := exec.Command("ipatool", "download", "--bundle-identifier", bundleID, "--output", installPath, "--purchase", "--verbose")

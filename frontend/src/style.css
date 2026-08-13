@@ -74,6 +74,12 @@ p {
     font-size: 1rem;
 }
 
+/* Spacer for use within sections */
+.spacer {
+    flex-grow: 1;
+    margin: 16px 0;
+}
+
 .app-shell {
     min-height: 100vh;
     display: grid;

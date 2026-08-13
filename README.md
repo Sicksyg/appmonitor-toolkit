@@ -4,21 +4,27 @@ AppMonitor is an application monitoring tool that provides real-time insights in
 
 
 ## Requirements
-- **Operating System**: macOS or Linux
+- **Operating System**: macOS
 - **Device**: Jailbroken iPhone
-- **Apple ID**: Recommended to use a spare account to avoid issues with your primary account
+- **Apple ID**: Highly recommended to use a spare account to avoid issues with your primary account
 - **Cable**: USB-A to Lightning cable (USB-C to Lightning can be unstable)
 
 ## Methodology
 This tool uses two analytical approaches:
 - **Static Analysis**: Identification of known SDKs used by an app
 - **Permission Analysis**: Identification of permissions used by the app
-- **Dynamic Analysis**: Identification of domains used by an app
+- _**Dynamic Analysis**: Identification of domains used by an app (In progress)_
 
 For detailed methodology, see [Monitoring infrastructural power: Methodological challenges in studying mobile infrastructures for datafication](https://example.com) by Lomborg, S., Sick Svendsen, K., Flensburg, S., & Sophus Lai, S. (2024)
 
 ## Citation
 If you use this software, please cite the provided research paper.
+
+## Caveats
+**The tool is a proof of concept and may have bugs or incomplete features.** If something does not work as expected, please report it in the issues section or make a pull request.
+
+### Jailbreak Issues
+Some apps will not run on jailbroken devices due to jailbreak detection mechanisms. In such cases, the tool will not be able to perform dynamic analysis. We are working on a solution to bypass jailbreak detection, but it is not yet implemented and has been deprioritized due to the complexity of the task. If you encounter an app that does not run on a jailbroken device, please report it in the issues section.
 
 ## Tech Stack
 
@@ -27,12 +33,13 @@ If you use this software, please cite the provided research paper.
 
 ### Backend (Go)
 - **Go** - Core backend language handling analysis logic, device communication, and data processing.
-  - `analysis/` - SDK and permission detection engine for both iOS and Android apps
+  - `iOS/` - SDK and permission detection engine for both iOS apps (using Frida)
   - `android/` - Android APK parsing and analysis
-  - `itunes/` - iOS IPA unpacking and App Store metadata retrieval
+  - `appstores/` - App Store and Play Store API interactions for app metadata retrieval - custom implementation of the iTunes Search API and Play Store scraping
   - `report/` - Report generation from analysis results
   - `helpers/` - Shared utility functions
   - `models/` - Shared data models used across the application
+  - `cmd/` - Standalone command-line tools for mass analysis and testing
 
 ### Frontend
 - [Vue 3](https://vuejs.org/) - Component-based UI framework powering the four main views: iOS, Android, Utilities, and Settings

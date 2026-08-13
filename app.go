@@ -349,6 +349,11 @@ func (a *App) LoadFromPhone() string {
 	return string(jsonBytes)
 }
 
+// Authentication function for Apple ID credentials. This is a wrapper around the helpers.Manager.AuthenticateAppleID method.
+func (a *App) AuthenticateAppleID(email string, password string) {
+	a.helpersMgr.AuthenticateAppleID(email, password)
+}
+
 func (a *App) Search(bundleID string) string {
 	return a.appstoresMgr.ItunesSearchBundle(bundleID)
 }
