@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os/exec"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
@@ -36,7 +35,7 @@ type StoreResult struct {
 	BundleID      string `json:"bundleId"`
 	SellerName    string `json:"sellerName"`
 	ArtistViewURL string `json:"artistViewUrl"`
-	ArtworkURL    string `json:"artworkUrl100"`
+	ArtworkURL    string `json:"artworkUrl512"`
 	Description   string `json:"description"`
 }
 
@@ -193,20 +192,20 @@ func (m *Manager) GooglePlaySearch(searchTerm string) string {
 	return string(jsonBytes)
 }
 
-func (m *Manager) DownloadAndroidApp(bundleID string, email string, token string) {
-	// Download the apk using apkeep
-	m.logger(fmt.Sprintf("Downloading Android app with bundle ID: %s", bundleID), "Manager.DownloadAndroidApp")
+// func (m *Manager) DownloadAndroidApp(bundleID string, email string, token string) {
+// 	// Download the apk using apkeep
+// 	m.logger(fmt.Sprintf("Downloading Android app with bundle ID: %s", bundleID), "Manager.DownloadAndroidApp")
 
-	/* apkeep -a md.point.news -d google-play -e 'EMAIL_HERE' -t 'TOKEN_HERE' . */
+// 	/* apkeep -a md.point.news -d google-play -e 'EMAIL_HERE' -t 'TOKEN_HERE' . */
 
-	appkeepCmd := exec.Command("apkeep", "-a", bundleID, "-d", "google-play", "-e", email, "-t", token, "./output")
-	output, err := appkeepCmd.CombinedOutput()
-	if err != nil {
-		m.logger(fmt.Sprintf("Error running apkeep: %v", err), "Manager.DownloadAndroidApp")
-		return
-	}
-	m.logger(fmt.Sprintf("apkeep output: %s", string(output)), "Manager.DownloadAndroidApp")
-}
+// 	appkeepCmd := exec.Command("apkeep", "-a", bundleID, "-d", "google-play", "-e", email, "-t", token, "./output")
+// 	output, err := appkeepCmd.CombinedOutput()
+// 	if err != nil {
+// 		m.logger(fmt.Sprintf("Error running apkeep: %v", err), "Manager.DownloadAndroidApp")
+// 		return
+// 	}
+// 	m.logger(fmt.Sprintf("apkeep output: %s", string(output)), "Manager.DownloadAndroidApp")
+// }
 
 // func main() {
 // 	// Example usage

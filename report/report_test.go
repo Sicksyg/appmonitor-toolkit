@@ -96,7 +96,7 @@ func TestMakeMarotoReport_WithMockData_WritesPDF(t *testing.T) {
 	}
 
 	outPath := filepath.Join(outDir, "mock_analysis_report.pdf")
-	rm := NewManager(func(_, _ string) {})
+	rm := NewManager(func(_, _ string) {}, Paths{ReportPath: outDir})
 	permissions := IosPermissionItems(permissionMap)
 
 	if err := rm.MakeMarotoReport(Input{

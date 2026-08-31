@@ -4,6 +4,33 @@
             <h1 class="headline-md">Service Configuration</h1>
         </header>
 
+        <!-- Report output location -->
+        <section class="glass-panel">
+            <header class="view-header">
+                <h3>Report Output Location</h3>
+                <p>Set the directory where generated reports will be saved.</p>
+            </header>
+            <div class="input-group">
+                <label for="report-output-path">Report Output Directory</label>
+                <input id="report-output-path" class="field" :value="settings.Output.ReportSavePath"
+                    :placeholder="reportOutputPlaceholder" type="text" readonly />
+            </div>
+            <div class="action-row">
+                <button class="btn neutral" type="button" @click="pickReportDir">Select Directory</button>
+                <button class="btn neutral" type="button" @click="openOutputDir">Open output directory</button>
+            </div>
+        </section>
+
+        <!-- Clear tmp directory of images and other files -->
+        <section class="glass-panel">
+            <header class="view-header">
+                <h3>Clear Temporary Directory</h3>
+                <p>Clear the temporary directory used for storing images and other files.</p>
+            </header>
+            <div class="action-row">
+                <button class="btn neutral" type="button" @click="clearTmpDir">Clear Temporary Directory</button>
+            </div>
+        </section>
 
         <!-- Apple AppStore Authentication -->
         <section class="glass-panel">
@@ -45,7 +72,7 @@
             </header>
             <div class="input-group">
                 <label for="google-email">Google Account Username (email)</label>
-                <input id="google-email" class="field" placeholder="username@example.com" type="text"
+                <input id="google-email" class="field" placeholder="username@gmail.com" type="text"
                     v-model="settings.auth.GoogleEmail" />
                 <label for="google-password">Google Account Password</label>
                 <input id="google-password" class="field" placeholder="••••••••" type="password"
@@ -54,22 +81,6 @@
             <div class="action-row">
                 <button class="btn android" type="button" @click="save">Save</button>
                 <span v-if="saveStatus" class="save-status">{{ saveStatus }}</span>
-            </div>
-        </section>
-
-        <!-- Report output location -->
-        <section class="glass-panel">
-            <header class="view-header">
-                <h3>Report Output Location</h3>
-                <p>Set the directory where generated reports will be saved.</p>
-            </header>
-            <div class="input-group">
-                <label for="report-output-path">Report Output Directory</label>
-                <input id="report-output-path" class="field" :value="settings.report.SavePath"
-                    :placeholder="reportOutputPlaceholder" type="text" readonly />
-            </div>
-            <div class="action-row">
-                <button class="btn neutral" type="button" @click="pickReportDir">Select Directory</button>
             </div>
         </section>
 
@@ -128,14 +139,13 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import { GetSettings, SaveSettings } from '../../wailsjs/go/main/App'
-import { SetReportSavePath, OpenSettingsDir } from '../../wailsjs/go/main/App'
-import { AuthenticateAppleID } from '../../wailsjs/go/main/App'
+import { GetSettings, SaveSettings, AuthenticateAppleID } from '../../wailsjs/go/main/App'
+import { SetReportSavePath, OpenSettingsDir, OpenOutputDir, ClearTmpDir } from '../../wailsjs/go/main/App'
 
 const settings = ref({
     auth: { AppleEmail: '', ApplePassword: '' },
     options: { DownloadFromAppStore: true, InstallOnDevice: true },
-    report: { SavePath: '' },
+    Output: { ReportSavePath: '' },
     exodusApiKey: { Key: '' }
 })
 const reportOutputPlaceholder = 'No directory selected yet'
@@ -164,11 +174,27 @@ async function pickReportDir() {
     try {
         const dir = await SetReportSavePath()
         if (dir) {
-            settings.value.report.SavePath = dir
+            settings.value.Output.ReportSavePath = dir
             await SaveSettings(settings.value)
         }
     } catch (error) {
         console.error('Error selecting directory:', error)
+    }
+}
+
+async function openOutputDir() {
+    try {
+        await OpenOutputDir()
+    } catch (error) {
+        console.error('Error opening output directory:', error)
+    }
+}
+
+async function clearTmpDir() {
+    try {
+        await ClearTmpDir()
+    } catch (error) {
+        console.error('Error clearing temporary directory:', error)
     }
 }
 
@@ -182,11 +208,8 @@ async function openSettingsDir() {
 
 async function reAuthenticateAppleID() {
     try {
-        await AuthenticateAppleID(settings.value.auth.AppleEmail, settings.value.auth.ApplePassword)
-        saveStatus.value = 'Re-authenticated'
-        setTimeout(() => { saveStatus.value = '' }, 2000)
+        await AuthenticateAppleID()
     } catch (error) {
-        saveStatus.value = 'Error re-authenticating'
         console.error('Error re-authenticating Apple ID:', error)
     }
 }

@@ -38,7 +38,7 @@ type ExodusTrackerFile struct {
 type Settings struct {
 	Auth          AuthSettings    `json:"auth"`
 	Options       OptionsSettings `json:"options"`
-	Report        ReportSettings  `json:"report"`
+	Output        OutputSetting   `json:"Output"`
 	ExodusAPIKey  ExodusAPIKey    `json:"exodusApiKey"`
 	GoogleCookies GoogleCookies   `json:"googleCookies"`
 }
@@ -55,8 +55,9 @@ type OptionsSettings struct {
 	InstallOnDevice      bool `json:"InstallOnDevice"`
 }
 
-type ReportSettings struct {
-	SavePath string `json:"SavePath"`
+type OutputSetting struct {
+	OutputPath     string `json:"OutputPath"`
+	ReportSavePath string `json:"ReportSavePath"`
 }
 
 type ExodusAPIKey struct {

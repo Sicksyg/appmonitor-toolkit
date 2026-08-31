@@ -22,23 +22,18 @@ import (
 	"AppMonitor/models"
 )
 
-// Color definitions for the report - Professional office theme
-var (
-	// Neutral grays and professional blue
-	darkCharcoal     = props.Color{Red: 60, Green: 60, Blue: 60}    // Main text and emphasis
-	mediumGray       = props.Color{Red: 100, Green: 100, Blue: 100} // Secondary elements
-	lightGray        = props.Color{Red: 220, Green: 220, Blue: 220} // Subtle backgrounds
-	veryLightGray    = props.Color{Red: 240, Green: 240, Blue: 240} // Row alternation
-	professionalBlue = props.Color{Red: 70, Green: 110, Blue: 160}  // Headers and accents
-	slateBlue        = props.Color{Red: 100, Green: 130, Blue: 170} // Secondary accents
-	charcoalDivider  = props.Color{Red: 80, Green: 80, Blue: 80}    // Dividers
-	cardBeige        = props.Color{Red: 208, Green: 178, Blue: 145} // Front-page stat card
-	panelOffWhite    = props.Color{Red: 246, Green: 243, Blue: 239} // Front-page content panel
-)
-
 // Manager handles PDF report generation
 type Manager struct {
-	logger func(message, function string)
+	logger     func(message, function string)
+	outputPath string
+	tempPath   string
+	reportPath string
+}
+
+type Paths struct {
+	OutputPath string
+	TempPath   string
+	ReportPath string
 }
 
 // Input contains all data needed to generate a report.
@@ -68,6 +63,74 @@ type newItemMap struct {
 	Count int
 }
 
+// NewManager creates a new report Manager
+func NewManager(logger func(message, function string), paths Paths) *Manager {
+	return &Manager{
+		logger:     logger,
+		outputPath: paths.OutputPath,
+		tempPath:   paths.TempPath,
+		reportPath: paths.ReportPath,
+	}
+}
+
+// --- Main function to generate a PDF report using Maroto v2 ---
+// MakeMarotoReport generates a professional PDF report using Maroto v2
+func (rm *Manager) MakeMarotoReport(input Input) error {
+	sdkMap := input.SDKMap
+	permissionItems := input.Permissions
+
+	// Create config
+	cfg := config.NewBuilder().
+		WithDimensions(210, 297).
+		WithLeftMargin(20).
+		WithTopMargin(15).
+		WithRightMargin(20).
+		Build()
+
+	// Create maroto
+	mrt := maroto.New(cfg)
+
+	// Build documents
+
+	// Front page
+	rm.buildHeader(mrt, input.ApplicationName, input.ApplicationBundleID, len(sdkMap))
+	rm.buildFrontPage(mrt, input.ApplicationName, input.ApplicationBundleID, input.AppStoreDescription, input.AppStoreIconPath, input.AppStoreURL, sdkMap, permissionItems)
+	mrt.AddPages(page.New())
+
+	// Details pages
+	rm.buildSDKSection(mrt, sdkMap)
+	rm.buildPermissionsSection(mrt, permissionItems)
+	rm.buildFooter(mrt)
+
+	// Generate
+	document, err := mrt.Generate()
+	if err != nil {
+		return fmt.Errorf("generate pdf: %w", err)
+	}
+
+	// Save
+	if err := document.Save(input.OutPath); err != nil {
+		return fmt.Errorf("save pdf: %w", err)
+	}
+
+	rm.logger(fmt.Sprintf("PDF written to: %s", input.OutPath), "report.Manager.MakeMarotoReport")
+	return nil
+}
+
+// Color definitions for the report - Professional office theme
+var (
+	// Neutral grays and professional blue
+	darkCharcoal     = props.Color{Red: 60, Green: 60, Blue: 60}    // Main text and emphasis
+	mediumGray       = props.Color{Red: 100, Green: 100, Blue: 100} // Secondary elements
+	lightGray        = props.Color{Red: 220, Green: 220, Blue: 220} // Subtle backgrounds
+	veryLightGray    = props.Color{Red: 240, Green: 240, Blue: 240} // Row alternation
+	professionalBlue = props.Color{Red: 70, Green: 110, Blue: 160}  // Headers and accents
+	slateBlue        = props.Color{Red: 100, Green: 130, Blue: 170} // Secondary accents
+	charcoalDivider  = props.Color{Red: 80, Green: 80, Blue: 80}    // Dividers
+	cardBeige        = props.Color{Red: 208, Green: 178, Blue: 145} // Front-page stat card
+	panelOffWhite    = props.Color{Red: 246, Green: 243, Blue: 239} // Front-page content panel
+)
+
 func (s newItemMap) GetHeader() core.Row {
 	return row.New(8).Add(
 		text.NewCol(9, "SDK", props.Text{Style: fontstyle.Bold, Color: &darkCharcoal}),
@@ -86,13 +149,6 @@ func (s newItemMap) GetContent(i int) core.Row {
 	}
 
 	return r
-}
-
-// NewManager creates a new report Manager
-func NewManager(logger func(message, function string)) *Manager {
-	return &Manager{
-		logger: logger,
-	}
 }
 
 func cutText(text string, maxLength int) string {
@@ -293,49 +349,6 @@ func AndroidPermissionItems(permissionMap map[string]models.AndroidPermissionDet
 	})
 
 	return items
-}
-
-// MakeMarotoReport generates a professional PDF report using Maroto v2
-func (rm *Manager) MakeMarotoReport(input Input) error {
-	sdkMap := input.SDKMap
-	permissionItems := input.Permissions
-
-	// Create config
-	cfg := config.NewBuilder().
-		WithDimensions(210, 297).
-		WithLeftMargin(20).
-		WithTopMargin(15).
-		WithRightMargin(20).
-		Build()
-
-	// Create maroto
-	mrt := maroto.New(cfg)
-
-	// Build documents
-
-	// Front page
-	rm.buildHeader(mrt, input.ApplicationName, input.ApplicationBundleID, len(sdkMap))
-	rm.buildFrontPage(mrt, input.ApplicationName, input.ApplicationBundleID, input.AppStoreDescription, input.AppStoreIconPath, input.AppStoreURL, sdkMap, permissionItems)
-	mrt.AddPages(page.New())
-
-	// Details pages
-	rm.buildSDKSection(mrt, sdkMap)
-	rm.buildPermissionsSection(mrt, permissionItems)
-	rm.buildFooter(mrt)
-
-	// Generate
-	document, err := mrt.Generate()
-	if err != nil {
-		return fmt.Errorf("generate pdf: %w", err)
-	}
-
-	// Save
-	if err := document.Save(input.OutPath); err != nil {
-		return fmt.Errorf("save pdf: %w", err)
-	}
-
-	rm.logger(fmt.Sprintf("PDF written to: %s", input.OutPath), "report.Manager.MakeMarotoReport")
-	return nil
 }
 
 // buildHeader registers a consistent header for each page with the application name and report title
@@ -551,22 +564,37 @@ func (rm *Manager) buildSDKSection(m core.Maroto, sdkMap map[string][]string) {
 
 	m.AddRow(3)
 
-	for _, sdk := range sdkNames {
-		if len(sdkMap[sdk]) == 0 {
+	for _, sdkname := range sdkNames {
+		if len(sdkMap[sdkname]) == 0 {
 			continue
 		}
 
+		// Add SDK name as a header for the list of classes
 		m.AddRow(6,
 			col.New(12).Add(
-				text.New(fmt.Sprintf("%s classes:", sdk), props.Text{
+				text.New(fmt.Sprintf("%s classes:", sdkname), props.Text{
 					Size:  10,
 					Style: fontstyle.Bold,
 					Color: &slateBlue,
 				}),
 			),
 		)
+		// Add info on the SDK (comment, website, detail, link to documentation) from the sdkMap.
+		// Should be in this format:
+		// type SDKSignature struct {
+		// 	Regex       string `json:"regex"`
+		// 	DomainRegex string `json:"domain_regex"`
+		// 	Name        string `json:"name"`
+		// 	Comment     string `json:"comment"`
+		// 	Detail      string `json:"detail"`
+		// 	Website     string `json:"website"`
+		// 	Link        string `json:"link"`
+		// 	ID          int    `json:"id"`
+		// }
 
-		for _, className := range sdkMap[sdk] {
+		// Assuming the first class name can be used to retrieve SDK details if needed
+		// Add each class name under the SDK name
+		for _, className := range sdkMap[sdkname] {
 			m.AddRow(5,
 				col.New(12).Add(
 					text.New(fmt.Sprintf("  - %s", cutText(className, 40)), props.Text{

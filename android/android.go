@@ -1,7 +1,7 @@
 package android
 
 import (
-	assetfiles "AppMonitor/assets"
+	"AppMonitor/assets"
 	"AppMonitor/models"
 	"encoding/json"
 	"fmt"
@@ -9,79 +9,32 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 )
 
 type Manager struct {
-	logger func(message, function string)
+	logger     func(message, function string)
+	outputPath string
+	tmpPath    string
 }
 
 type Permission struct {
 	Name string
 }
 
+type Paths struct {
+	OutputPath string
+	TempPath   string
+}
+
 // NewManager creates a new analysis Manager
-func NewManager(logger func(message, function string)) *Manager {
+func NewManager(logger func(message, function string), paths Paths) *Manager {
 	return &Manager{
-		logger: logger,
+		logger:     logger,
+		outputPath: paths.OutputPath,
+		tmpPath:    paths.TempPath,
 	}
-}
-
-func (m *Manager) GrapCookies() {
-	m.logger("GrapCookies function called", "Manager.GrapCookies")
-	// Android-specific cookie grabbing logic would go here
-	url := "https://accounts.google.com/v3/signin/identifier?flowName=EmbeddedSetupAndroid&continue=https://accounts.google.com/o/android/auth?lang%3Den%26cc%3DUS%26langCountry%3Den_US%26xoauth_display_name%3DAndroid%2BDevice%26tmpl%3Dnew_account%26source%3Dandroid%26return_user_id%3Dtrue&dsh=S1226023185:1769769569605796"
-	resp, err := http.Get(url)
-	if err != nil {
-		m.logger("Error making request: "+err.Error(), "Manager.GrapCookies")
-		return
-	}
-	defer resp.Body.Close()
-
-	for _, cookie := range resp.Cookies() {
-		m.logger(fmt.Sprintf("Cookie: %s = %s", cookie.Name, cookie.Value), "Manager.GrapCookies")
-	}
-}
-
-func (m *Manager) GetSDKIdentifiersFromExodus(authToken string) {
-	// Fetch SDK data from the Exodus API
-	m.logger("Fetching SDK data from Exodus API", "Manager.GetSDKIdentifiersFromExodus")
-	// API call logic would go here
-
-	url := "https://reports.exodus-privacy.eu.org/api/trackers"
-	headers := map[string]string{
-		"Authorization": "Token " + authToken, // <-- INSERT TOKEN HERE --
-	}
-
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		m.logger(fmt.Sprintf("Error making request: %v", err), "Manager.GetSDKIdentifiersFromExodus")
-		return
-	}
-	for key, value := range headers {
-		req.Header.Set(key, value)
-	}
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		m.logger(fmt.Sprintf("Error making request: %v", err), "Manager.GetSDKIdentifiersFromExodus")
-		return
-	}
-	defer resp.Body.Close()
-
-	// parse response and save SDK data to a json file
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		m.logger(fmt.Sprintf("Error reading response body: %v", err), "Manager.GetSDKIdentifiersFromExodus")
-		return
-	}
-	err = os.WriteFile("all_SDK.json", body, 0644)
-	if err != nil {
-		m.logger(fmt.Sprintf("Error writing SDK data to file: %v", err), "Manager.GetSDKIdentifiersFromExodus")
-		return
-	}
-	m.logger("SDK data saved to all_SDK.json", "Manager.GetSDKIdentifiersFromExodus")
 }
 
 func (m *Manager) GetSDKsFromExodus(authToken string) {
@@ -125,26 +78,24 @@ func (m *Manager) GetSDKsFromExodus(authToken string) {
 		return
 	}
 
-	formattedBody, err := json.MarshalIndent(parsed, "", "    ")
-	if err != nil {
-		m.logger(fmt.Sprintf("Error formatting JSON: %v", err), "Manager.GetSDKsFromExodus")
-		return
-	}
+	// This past is not in use, but it is kept here for reference. The SDK data is now embedded in the binary and can be accessed using the assets.ReadFile function.
+	// Later i will implement a manual download from the settings panel and a function that will check if the SDK data is up to date and if not,
+	// it will fetch the latest data from the Exodus API and save it to the embedded assets.
 
-	filename := "./assets/all_SDK.json"
+	// formattedBody, err := json.MarshalIndent(parsed, "", "    ")
+	// if err != nil {
+	// 	m.logger(fmt.Sprintf("Error formatting JSON: %v", err), "Manager.GetSDKsFromExodus")
+	// 	return
+	// }
 
-	err = os.MkdirAll("./assets", 0755)
-	if err != nil {
-		m.logger(fmt.Sprintf("Error creating assets directory: %v", err), "Manager.GetSDKsFromExodus")
-		return
-	}
+	// filename := filepath.Join(m.tmpPath, "all_SDK.json")
 
-	err = os.WriteFile(filename, formattedBody, 0644)
-	if err != nil {
-		m.logger(fmt.Sprintf("Error writing SDK data to file: %v", err), "Manager.GetSDKsFromExodus")
-		return
-	}
-	m.logger("SDK data saved to all_SDK.json", "Manager.GetSDKsFromExodus")
+	// err = os.WriteFile(filename, formattedBody, 0644)
+	// if err != nil {
+	// 	m.logger(fmt.Sprintf("Error writing SDK data to file: %v", err), "Manager.GetSDKsFromExodus")
+	// 	return
+	// }
+	// m.logger("SDK data saved to all_SDK.json", "Manager.GetSDKsFromExodus")
 }
 
 // GetAppDataFromExodus fetches app data from the Exodus API for the given bundleID and saves it to a json file
@@ -203,7 +154,7 @@ func (m *Manager) GetAppDataFromExodus(bundleID string, authToken string, saveTo
 
 	if saveToFile {
 		// save to file in tmp folder with the name {bundleID}_data.json
-		filename := fmt.Sprintf("./tmp/%s_data.json", bundleID)
+		filename := filepath.Join(m.tmpPath, fmt.Sprintf("%s_data.json", bundleID))
 
 		err = os.WriteFile(filename, formattedJson, 0644)
 		if err != nil {
@@ -221,10 +172,7 @@ func (m *Manager) EnrichPermissions(permissionList []Permission) (map[string]mod
 	// Enrichment logic would go here
 
 	// Load android_permissions.json file
-	fileData, err := os.ReadFile("./assets/android_permissions.json")
-	if err != nil {
-		fileData, err = assetfiles.ReadFile("android_permissions.json")
-	}
+	fileData, err := assets.ReadFile("android_permissions.json")
 	if err != nil {
 		m.logger(fmt.Sprintf("Error reading android_permissions.json file: %v", err), "Manager.EnrichPermissions")
 		return nil, err
@@ -264,10 +212,7 @@ func (m *Manager) EnrichSDKs(sdkIdList []int) (map[string]models.AndroidSdkDetai
 	// Enrichment logic would go here
 
 	// Load all_SDK.json file
-	fileData, err := os.ReadFile("./assets/all_SDK.json")
-	if err != nil {
-		fileData, err = assetfiles.ReadFile("all_SDK.json")
-	}
+	fileData, err := assets.ReadFile("all_SDK.json")
 	if err != nil {
 		m.logger(fmt.Sprintf("Error reading all_SDK.json file: %v", err), "Manager.EnrichSDKs")
 		return nil, err
@@ -363,3 +308,23 @@ func (m *Manager) RunCompleteAnalysis(bundleID string, authToken string) (map[st
 
 	return enrichedPermissions, enrichedSDKs, nil
 }
+
+/*
+Not in use, the code would be a part of Apkeep project to download apps using the oauth2 flow.
+Something open website, ask user to login and then grab the cookies from the browser and use them to download the app...
+
+func (m *Manager) GrapCookies() {
+	m.logger("GrapCookies function called", "Manager.GrapCookies")
+	// Android-specific cookie grabbing logic would go here
+	url := "https://accounts.google.com/v3/signin/identifier?flowName=EmbeddedSetupAndroid&continue=https://accounts.google.com/o/android/auth?lang%3Den%26cc%3DUS%26langCountry%3Den_US%26xoauth_display_name%3DAndroid%2BDevice%26tmpl%3Dnew_account%26source%3Dandroid%26return_user_id%3Dtrue&dsh=S1226023185:1769769569605796"
+	resp, err := http.Get(url)
+	if err != nil {
+		m.logger("Error making request: "+err.Error(), "Manager.GrapCookies")
+		return
+	}
+	defer resp.Body.Close()
+
+	for _, cookie := range resp.Cookies() {
+		m.logger(fmt.Sprintf("Cookie: %s = %s", cookie.Name, cookie.Value), "Manager.GrapCookies")
+	}
+} */

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -26,24 +27,66 @@ type DeviceInfo struct {
 	Version string
 }
 
+// ToolPaths holds absolute paths to external binaries extracted by EnsureTools.
+type ToolPaths struct {
+	IPATool          string
+	IDeviceID        string
+	IDeviceInfo      string
+	IDeviceInstaller string
+}
+
+type Paths struct {
+	TempPath string
+	LibPath  string
+}
+
+// NewToolPaths builds tool paths from the extracted bin directory.
+func NewToolPaths(binDir string) ToolPaths {
+	return ToolPaths{
+		IPATool:          filepath.Join(binDir, "ipatool"),
+		IDeviceID:        filepath.Join(binDir, "idevice_id"),
+		IDeviceInfo:      filepath.Join(binDir, "ideviceinfo"),
+		IDeviceInstaller: filepath.Join(binDir, "ideviceinstaller"),
+	}
+}
+
 // Manager handles device-related operations
 type Manager struct {
-	logger func(message, function string)
-	ctx    context.Context
+	logger  func(message, function string)
+	ctx     context.Context
+	tools   ToolPaths
+	tmpPath string
+	libPath string
 }
 
 // NewManager creates a new helpers Manager
-func NewManager(logger func(message, function string), ctx context.Context) *Manager {
+func NewManager(logger func(message, function string), ctx context.Context, tools ToolPaths, paths Paths) *Manager {
 	return &Manager{
-		logger: logger,
-		ctx:    ctx,
+		logger:  logger,
+		ctx:     ctx,
+		tools:   tools,
+		tmpPath: paths.TempPath,
+		libPath: paths.LibPath,
 	}
+}
+
+// withBundledLibEnv sets DYLD_LIBRARY_PATH/DYLD_FALLBACK_LIBRARY_PATH so the bundled
+// binaries can find their extracted dylibs regardless of their baked-in rpath.
+func (m *Manager) withBundledLibEnv(cmd *exec.Cmd) *exec.Cmd {
+	if m.libPath == "" {
+		return cmd
+	}
+	cmd.Env = append(os.Environ(),
+		"DYLD_LIBRARY_PATH="+m.libPath,
+		"DYLD_FALLBACK_LIBRARY_PATH="+m.libPath,
+	)
+	return cmd
 }
 
 // GetInfo retrieves device information using ideviceinfo
 func (m *Manager) GetInfo() *DeviceInfo {
 	// Get info from connected iPhone using ideviceinfo
-	ideviceInfoCMD := exec.Command("ideviceinfo", "-s")
+	ideviceInfoCMD := m.withBundledLibEnv(exec.Command(m.tools.IDeviceInfo, "-s"))
 	output, err := ideviceInfoCMD.Output()
 	if err != nil {
 		m.logger("Error getting device info: "+err.Error(), "helpers.Manager.GetInfo")
@@ -105,7 +148,7 @@ func (m *Manager) GetInfo() *DeviceInfo {
 // GetUDID retrieves the UDID of the connected device
 func (m *Manager) GetUDID() string {
 	// Create object to run and capture output from idevice_id
-	ideviceCMD := exec.Command("idevice_id")
+	ideviceCMD := m.withBundledLibEnv(exec.Command(m.tools.IDeviceID))
 	output, err := ideviceCMD.Output()
 	if err != nil {
 		m.logger("Error getting UDID: "+err.Error(), "helpers.Manager.GetUDID")
@@ -126,8 +169,8 @@ func (m *Manager) GetInstalledApps(udid string) []InstalledApp {
 		udid = m.GetUDID()
 	}
 
-	// Create object to run and capture output from ideviceinstaller
-	ideviceListCMD := exec.Command("ideviceinstaller", "-u", udid, "list", "--user")
+	// Create object to run and capture output from ideviceinstaller "ideviceinstaller", "-u", udid, "list", "--user"
+	ideviceListCMD := m.withBundledLibEnv(exec.Command(m.tools.IDeviceInstaller, "-u", udid, "list", "--user"))
 
 	// Set up pipes to capture stdout
 	ideviceOut, _ := ideviceListCMD.StdoutPipe()
@@ -159,99 +202,83 @@ func (m *Manager) GetInstalledApps(udid string) []InstalledApp {
 }
 
 // Helper function to Authenticate with Apple ID using ipatool
-func (m *Manager) AuthenticateAppleID(email string, password string) {
+func (m *Manager) AuthenticateAppleID(email string, password string) error {
 	m.logger("Authenticating Apple ID: "+email, "helpers.Manager.AuthenticateAppleID")
 
-	// Create object to run and capture output from ipatool.
-	ipatoolAuthCMD := exec.Command("ipatool", "auth", "login", "--email", email, "--password", password)
-	ipatoolAuthCMD.Start()
+	ipatoolAuthCMD := m.withBundledLibEnv(exec.Command(m.tools.IPATool, "auth", "login", "--email", email, "--password", password))
+	outputBytes, err := ipatoolAuthCMD.CombinedOutput()
 
-	// Set up pipes to capture stdout and stderr
-	ipatoolOut, _ := ipatoolAuthCMD.StdoutPipe()
-	ipatoolErr, _ := ipatoolAuthCMD.StderrPipe()
-
-	// Read output and error streams
-	outputBytes, _ := io.ReadAll(ipatoolOut)
-	errorBytes, _ := io.ReadAll(ipatoolErr)
-
-	// Log authentication output and errors
 	m.logger("Authentication output: "+string(outputBytes), "helpers.Manager.AuthenticateAppleID")
-	if len(errorBytes) > 0 {
-		m.logger("Authentication error: "+string(errorBytes), "helpers.Manager.AuthenticateAppleID")
+	if err != nil {
+		m.logger("Authentication error: "+err.Error(), "helpers.Manager.AuthenticateAppleID")
 	}
-
-	ipatoolAuthCMD.Wait()
+	return err
 }
 
 // Helper function to download an IPA from the App Store using ipatool
-func (m *Manager) DownloadApp(bundleID string, email string, password string) {
+func (m *Manager) DownloadApp(bundleID string, email string, password string, pathToTmpDir string) error {
 	m.logger("Downloading app with bundleID: "+bundleID, "helpers.Manager.DownloadApp")
 
-	installPath := "tmp/" + bundleID + ".ipa"
+	downloadPath := filepath.Join(pathToTmpDir, bundleID+".ipa")
 
 	// authenticate with Apple ID before downloading
-	m.AuthenticateAppleID(email, password)
+	if err := m.AuthenticateAppleID(email, password); err != nil {
+		return fmt.Errorf("authenticate Apple ID: %w", err)
+	}
 
-	// Create object to run and capture output from ipatool.
-	ipatoolCMD := exec.Command("ipatool", "download", "--bundle-identifier", bundleID, "--output", installPath, "--purchase", "--verbose")
-	// Set up pipes to capture stdout and stderr
-	ipatoolOut, _ := ipatoolCMD.StdoutPipe()
-	ipatoolCMD.Start()
-
-	outputBytes, _ := io.ReadAll(ipatoolOut)
-
-	// Log download output
-	m.logger("Downloaded IPA to: "+installPath, "helpers.Manager.DownloadApp")
-
-	ipatoolCMD.Wait()
+	ipatoolCMD := m.withBundledLibEnv(exec.Command(m.tools.IPATool, "download", "--bundle-identifier", bundleID, "--output", downloadPath, "--purchase", "--verbose"))
+	outputBytes, err := ipatoolCMD.CombinedOutput()
 	m.logger("Download output: "+string(outputBytes), "helpers.Manager.DownloadApp")
+	if err != nil {
+		m.logger("Download failed: "+err.Error(), "helpers.Manager.DownloadApp")
+		return fmt.Errorf("download IPA: %w", err)
+	}
+	m.logger("Downloaded IPA to: "+downloadPath, "helpers.Manager.DownloadApp")
+	return nil
 }
 
 // Helper function to install an IPA on the connected iPhone
-func (m *Manager) InstallApp(udid, installPath string) {
-	m.logger("Installing App: "+installPath+" on UDID: "+udid, "helpers.Manager.InstallApp")
+func (m *Manager) InstallApp(udid, pathToIpaFile string) error {
+	m.logger("Installing App: "+pathToIpaFile+" on UDID: "+udid, "helpers.Manager.InstallApp")
 
 	// get udid from App struct and if not set, use the passed udid
 	if udid == "" {
 		udid = m.GetUDID()
 	}
 
-	//Create object to run and capture output from ideviceinstaller.
-	ideviceInstallCMD := exec.Command("ideviceinstaller", "-u", udid, "-w", "install", installPath)
-
-	// Set up pipes to capture stdout and stderr
-	ideviceIn, _ := ideviceInstallCMD.StdinPipe()
-	ideviceOut, _ := ideviceInstallCMD.StdoutPipe()
-	//ideviceErr, _ := ideviceInstallCMD.StderrPipe()
-	ideviceInstallCMD.Start()
-
-	ideviceIn.Close()
-	outputBytes, _ := io.ReadAll(ideviceOut)
+	ideviceInstallCMD := m.withBundledLibEnv(exec.Command(m.tools.IDeviceInstaller, "-u", udid, "-w", "install", pathToIpaFile))
+	outputBytes, err := ideviceInstallCMD.CombinedOutput()
 
 	// Emit installation output to frontend
 	runtime.EventsEmit(m.ctx, "installationOutput", string(outputBytes))
 
-	ideviceInstallCMD.Wait()
 	m.logger("Installation output: "+string(outputBytes), "helpers.Manager.InstallApp")
-	//errBytes, _ := io.ReadAll(ideviceErr)
-
-	//return string(outputBytes)
+	if err != nil {
+		m.logger("Installation failed: "+err.Error(), "helpers.Manager.InstallApp")
+		return fmt.Errorf("install IPA: %w", err)
+	}
+	return nil
 }
 
-func (m *Manager) DownloadAndInstall(udid, bundleID string, email, password string) {
+// Calls DownloadApp and InstallApp in sequence, checking if the app is already installed
+func (m *Manager) DownloadAndInstall(udid, bundleID string, email, password string, pathToTmpDir string) error {
 	// Check if app is already installed
 	installedApps := m.GetInstalledApps(udid)
 	for _, app := range installedApps {
 		if app.CFBundleIdentifier == bundleID {
 			m.logger("App "+bundleID+" is already installed on device "+udid, "helpers.Manager.DownloadAndInstall")
-			return
+			return nil
 		}
 	}
-
 	// Download and install the app
-	m.DownloadApp(bundleID, email, password)
-	installPath := "tmp/" + bundleID + ".ipa"
-	m.InstallApp(udid, installPath)
+	if err := m.DownloadApp(bundleID, email, password, pathToTmpDir); err != nil {
+		return err
+	}
+	pathToIpaFile := filepath.Join(pathToTmpDir, bundleID+".ipa")
+	if err := m.InstallApp(udid, pathToIpaFile); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (m *Manager) DownloadAndSaveAppIcon(url string, bundleID string) string {
@@ -260,6 +287,7 @@ func (m *Manager) DownloadAndSaveAppIcon(url string, bundleID string) string {
 	resp, err := http.Get(url)
 	if err != nil {
 		m.logger(fmt.Sprintf("failed to download app icon: %v", err), "helpers.Manager.DownloadAndSaveAppIcon")
+		return ""
 	}
 	defer resp.Body.Close()
 
@@ -274,10 +302,11 @@ func (m *Manager) DownloadAndSaveAppIcon(url string, bundleID string) string {
 		suffix += ".png" // Default to PNG if no extension found
 	}
 
-	iconPath := fmt.Sprintf("tmp/%s_icon%s", bundleID, suffix)
+	iconPath := filepath.Join(m.tmpPath, fmt.Sprintf("%s_icon%s", bundleID, suffix))
 	outFile, err := os.Create(iconPath)
 	if err != nil {
 		m.logger(fmt.Sprintf("failed to create icon file: %v", err), "helpers.Manager.DownloadAndSaveAppIcon")
+		return ""
 	}
 	defer outFile.Close()
 
@@ -297,7 +326,7 @@ func (m *Manager) LoadIpaFile() string {
 	m.logger("Opening file dialog", "helpers.Manager.LoadIpaFile")
 	filePath, err := runtime.OpenFileDialog(m.ctx, runtime.OpenDialogOptions{
 		Title:            "Select a file",
-		DefaultDirectory: "./tmp/",
+		DefaultDirectory: m.tmpPath,
 		Filters: []runtime.FileFilter{
 			{
 				DisplayName: "IPA Files",
@@ -306,7 +335,7 @@ func (m *Manager) LoadIpaFile() string {
 		},
 	})
 	if err != nil {
-		fmt.Println("Failed to open file dialog:", err)
+		m.logger(fmt.Sprintf("failed to open IPA file dialog: %v", err), "helpers.Manager.LoadIpaFile")
 		return ""
 	}
 
@@ -318,7 +347,7 @@ func (m *Manager) LoadAppList() string {
 	m.logger("Loading app list", "helpers.Manager.LoadAppList")
 	filePath, err := runtime.OpenFileDialog(m.ctx, runtime.OpenDialogOptions{
 		Title:            "Select a file",
-		DefaultDirectory: "./tmp/",
+		DefaultDirectory: m.tmpPath,
 		Filters: []runtime.FileFilter{
 			{
 				DisplayName: "CSV Files",
@@ -327,10 +356,10 @@ func (m *Manager) LoadAppList() string {
 		},
 	})
 	if err != nil {
-		fmt.Println("Failed to open file dialog:", err)
+		m.logger(fmt.Sprintf("failed to open app list dialog: %v", err), "helpers.Manager.LoadAppList")
 		return ""
 	}
-	fmt.Println("Selected file:", filePath)
+	m.logger("Selected app list file: "+filePath, "helpers.Manager.LoadAppList")
 
 	return filePath
 }

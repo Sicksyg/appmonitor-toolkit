@@ -1,7 +1,7 @@
 package ios
 
 import (
-	assetfiles "AppMonitor/assets"
+	"AppMonitor/assets"
 	"AppMonitor/models"
 	"encoding/json"
 	"fmt"
@@ -30,6 +30,9 @@ type SDKSignature struct {
 	DomainRegex string `json:"domain_regex"`
 	Name        string `json:"name"`
 	Comment     string `json:"comment"`
+	Detail      string `json:"detail"`
+	Website     string `json:"website"`
+	Link        string `json:"link"`
 	ID          int    `json:"id"`
 }
 
@@ -43,15 +46,39 @@ type ApplePermissionSignature struct {
 
 // Manager struct to handle analysis operations
 type Manager struct {
-	logger    func(message, function string)
-	fridaData *FridaData
+	logger       func(message, function string)
+	fridaData    *FridaData
+	fridaRoot    string
+	classLogPath string
+}
+
+type Paths struct {
+	FridaRoot    string
+	ClassLogPath string
 }
 
 // NewManager creates a new analysis Manager
-func NewManager(logger func(message, function string)) *Manager {
+func NewManager(logger func(message, function string), paths Paths) *Manager {
 	return &Manager{
-		logger: logger,
+		logger:       logger,
+		fridaRoot:    paths.FridaRoot,
+		classLogPath: paths.ClassLogPath,
 	}
+}
+
+// ResumeApp resumes the spawned-suspended process. Keep the suspended window
+// as short as possible: iOS's launch watchdog kills apps that stay suspended
+// too long, independent of anything Frida does.
+func (m *Manager) ResumeApp() error {
+	if m.fridaData == nil {
+		return fmt.Errorf("frida not initialized, call FridaSetup first")
+	}
+	if err := m.fridaData.device.Resume(m.fridaData.pid); err != nil {
+		m.logger("Error resuming app: "+err.Error(), "Manager.ResumeApp")
+		return fmt.Errorf("failed to resume app: %w", err)
+	}
+	m.logger("App resumed", "Manager.ResumeApp")
+	return nil
 }
 
 func (m *Manager) checkFridaServer(device *frida.Device) error {
@@ -120,6 +147,11 @@ func (m *Manager) FridaSetup(udid string, bundleID string) error {
 		return fmt.Errorf("failed to attach to app: %w", err)
 	}
 
+	// Surfaces the real cause (e.g. app self-killed on Frida detection) instead of a generic "session is gone" error later
+	session.On("detached", func(reason frida.SessionDetachReason, crash *frida.Crash) {
+		m.logger(fmt.Sprintf("Session detached: reason=%s crash=%v", reason, crash), "Manager.FridaSetup")
+	})
+
 	// Set frida data struct
 	m.fridaData = &FridaData{
 		device:  device.(*frida.Device),
@@ -140,11 +172,11 @@ func (m *Manager) AnalyseFridaPermissions(bundleID string) (map[string]string, e
 	}
 
 	// Path to frida project must be an absolute path on the local filesystem using path package
-	projectRoot, err := filepath.Abs("./frida")
-	if err != nil {
-		m.logger("Error getting absolute path: "+err.Error(), "Manager.AnalyseFridaPermissions")
-		return nil, fmt.Errorf("failed to get absolute path: %w", err)
-	}
+	// projectRoot, err := filepath.Abs(m.fridaRoot)
+	// if err != nil {
+	// 	m.logger("Error getting absolute path: "+err.Error(), "Manager.AnalyseFridaPermissions")
+	// 	return nil, fmt.Errorf("failed to get absolute path: %w", err)
+	// }
 
 	comp := frida.NewCompiler()
 	comp.On("diagnostics", func(diag string) {
@@ -152,7 +184,7 @@ func (m *Manager) AnalyseFridaPermissions(bundleID string) (map[string]string, e
 	})
 
 	bopts := frida.NewCompilerOptions()
-	bopts.SetProjectRoot(projectRoot)
+	bopts.SetProjectRoot(m.fridaRoot)
 	bopts.SetSourceMaps(frida.SourceMapsOmitted)
 	bopts.SetJSCompression(frida.JSCompressionTerser)
 
@@ -165,7 +197,7 @@ func (m *Manager) AnalyseFridaPermissions(bundleID string) (map[string]string, e
 	// Create Frida script
 	fridaScript, err := m.fridaData.session.CreateScript(compiledScript)
 	if err != nil {
-		m.logger("Error creating script: "+err.Error(), "Manager.AnalyseFridaPermissions")
+		m.logger("Error creating Permission script: "+err.Error(), "Manager.AnalyseFridaPermissions")
 		return nil, fmt.Errorf("failed to create script: %w", err)
 	}
 	defer fridaScript.Clean()
@@ -184,12 +216,6 @@ func (m *Manager) AnalyseFridaPermissions(bundleID string) (map[string]string, e
 	if err := fridaScript.Load(); err != nil {
 		m.logger("Error loading script: "+err.Error(), "Manager.AnalyseFridaPermissions")
 		return nil, fmt.Errorf("failed to load script: %w", err)
-	}
-
-	// Resume app from suspended state
-	if err := m.fridaData.device.Resume(m.fridaData.pid); err != nil {
-		m.logger("Error resuming app: "+err.Error(), "Manager.AnalyseFridaPermissions")
-		return nil, fmt.Errorf("failed to resume app: %w", err)
 	}
 
 	// Wait for results with timeout
@@ -234,15 +260,12 @@ func (m *Manager) parsePermissionsResults(results string) map[string]string {
 }
 
 func (m *Manager) LoadPermissionsSignatures() []ApplePermissionSignature {
-	// Load permissions signatures from JSON file or other source
+	// Load permissions signatures from the embedded assets filesystem
 	// Get permissions signatures from https://github.com/Sicksyg/iOS_ProtectedResources/blob/main/ios_ProtectedResources.json
 	// Return slice of PermissionSignature structs
 
 	m.logger("Loading permissions signatures", "Manager.LoadPermissionsSignatures")
-	fileData, err := os.ReadFile(filepath.Join("assets", "ios_permissions.json"))
-	if err != nil {
-		fileData, err = assetfiles.ReadFile("ios_permissions.json")
-	}
+	fileData, err := assets.ReadFile("ios_permissions.json")
 	if err != nil {
 		m.logger("Error reading permissions signatures file: "+err.Error(), "Manager.LoadPermissionsSignatures")
 		return []ApplePermissionSignature{}
@@ -314,11 +337,11 @@ func (m *Manager) AnalyseFridaStatic(bundleID string) ([]string, error) {
 	}
 
 	// Path to frida project must be an absolute path on the local filesystem using path package
-	projectRoot, err := filepath.Abs("./frida")
-	if err != nil {
-		m.logger("Error getting absolute path: "+err.Error(), "Manager.AnalyseFridaStatic")
-		return nil, fmt.Errorf("failed to get absolute path: %w", err)
-	}
+	// projectRoot, err := filepath.Abs("./frida")
+	// if err != nil {
+	// 	m.logger("Error getting absolute path: "+err.Error(), "Manager.AnalyseFridaStatic")
+	// 	return nil, fmt.Errorf("failed to get absolute path: %w", err)
+	// }
 
 	comp := frida.NewCompiler()
 	comp.On("diagnostics", func(diag string) {
@@ -326,20 +349,20 @@ func (m *Manager) AnalyseFridaStatic(bundleID string) ([]string, error) {
 	})
 
 	bopts := frida.NewCompilerOptions()
-	bopts.SetProjectRoot(projectRoot)
+	bopts.SetProjectRoot(m.fridaRoot)
 	bopts.SetSourceMaps(frida.SourceMapsOmitted)
 	bopts.SetJSCompression(frida.JSCompressionTerser)
 
 	compiledScript, err := comp.Build("find_all_classes.ts", bopts)
 	if err != nil {
-		m.logger("Error compiling script: "+err.Error(), "Manager.AnalyseFridaStatic")
+		m.logger("Error compiling static script: "+err.Error(), "Manager.AnalyseFridaStatic")
 		return nil, fmt.Errorf("failed to compile script: %w", err)
 	}
 
 	// Create Frida script
 	fridaScript, err := m.fridaData.session.CreateScript(compiledScript)
 	if err != nil {
-		m.logger("Error creating script: "+err.Error(), "Manager.AnalyseFridaStatic")
+		m.logger("Error creating static script: "+err.Error(), "Manager.AnalyseFridaStatic")
 		return nil, fmt.Errorf("failed to create script: %w", err)
 	}
 	defer fridaScript.Clean()
@@ -411,13 +434,14 @@ func (m *Manager) saveClassListLog(bundleID string, classList []string) (string,
 		return "", nil
 	}
 
-	if err := os.MkdirAll(filepath.Join("output", "classlogs"), 0o755); err != nil {
+	classLogDir := m.classLogPath
+	if err := os.MkdirAll(classLogDir, 0o755); err != nil {
 		return "", fmt.Errorf("failed to create class log directory: %w", err)
 	}
 
 	timestamp := time.Now().Format("20060102_150405")
 	fileName := fmt.Sprintf("%s_classlog_%s.txt", bundleID, timestamp)
-	filePath := filepath.Join("output", "classlogs", fileName)
+	filePath := filepath.Join(classLogDir, fileName)
 	contents := strings.Join(classList, "\n") + "\n"
 
 	if err := os.WriteFile(filePath, []byte(contents), 0o644); err != nil {
@@ -432,10 +456,7 @@ func (m *Manager) LoadSDKSignatures() []SDKSignature {
 	// Get SDK signatures from https://github.com/Sicksyg/iOS-SDK-Signatures/blob/main/ios_signatures.json
 
 	m.logger("Loading SDK signatures", "Manager.detectSDKs")
-	fileData, err := os.ReadFile(filepath.Join("assets", "ios_signatures.json"))
-	if err != nil {
-		fileData, err = assetfiles.ReadFile("ios_signatures.json")
-	}
+	fileData, err := assets.ReadFile("ios_signatures.json")
 	if err != nil {
 		m.logger("Error reading SDK signatures file: "+err.Error(), "Manager.LoadSDKSignatures")
 		return []SDKSignature{}
@@ -445,7 +466,7 @@ func (m *Manager) LoadSDKSignatures() []SDKSignature {
 	var sdkSignatures []SDKSignature
 	err = json.Unmarshal(fileData, &sdkSignatures)
 	if err != nil {
-		fmt.Println("Error unmarshaling SDK signatures: " + err.Error())
+		m.logger("Error unmarshaling SDK signatures: "+err.Error(), "Manager.LoadSDKSignatures")
 		return []SDKSignature{}
 	}
 
@@ -461,7 +482,19 @@ func (m *Manager) RunCompleteAnalysis(udid, bundleID string) (map[string]models.
 
 	time.Sleep(time.Second * 1) // brief pause to ensure app is fully started
 
-	// Step 2: Analyze permissions (raw from Frida)
+	// Step 2: Run static analysis to get class list (works while suspended)
+	classList, err := m.AnalyseFridaStatic(bundleID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("static analysis failed: %w", err)
+	}
+
+	// Step 3: Resume immediately so the OS launch watchdog doesn't kill the
+	// still-suspended process; permission hooks also require the app to run.
+	if err := m.ResumeApp(); err != nil {
+		return nil, nil, fmt.Errorf("resume failed: %w", err)
+	}
+
+	// Step 4: Analyze permissions (raw from Frida)
 	rawPermissions, err := m.AnalyseFridaPermissions(bundleID)
 	if err != nil {
 		m.logger("Permissions analysis failed: "+err.Error(), "Manager.RunCompleteAnalysis")
@@ -469,22 +502,10 @@ func (m *Manager) RunCompleteAnalysis(udid, bundleID string) (map[string]models.
 		rawPermissions = make(map[string]string)
 	}
 
-	time.Sleep(time.Second * 3) // brief pause to ensure app is fully started
-
-	// Step 3: Run static analysis to get class list
-	classList, err := m.AnalyseFridaStatic(bundleID)
-	if err != nil {
-		return nil, nil, fmt.Errorf("static analysis failed: %w", err)
-	}
-
-	time.Sleep(time.Second * 1) // brief pause to ensure app is fully started
-
-	// Step 4: Detect SDKs from class list
+	// Step 5: Detect SDKs from class list (CPU-only, safe to run after resume)
 	sdks := m.AnalyseDetectSDKs(classList)
 
-	time.Sleep(time.Second * 1) // brief pause to ensure app is fully started
-
-	// Step 5: Enrich permissions with Apple signature data
+	// Step 6: Enrich permissions with Apple signature data
 	enrichedPermissions, err := m.AnalyseDetectPermissions(rawPermissions)
 	if err != nil {
 		m.logger("Permission enrichment failed: "+err.Error(), "Manager.RunCompleteAnalysis")
@@ -513,7 +534,7 @@ func (m *Manager) AnalyseDetectSDKs(classlist []string) map[string][]string {
 	for _, sig := range sdkSignatures {
 		regex, err := regexp.Compile(sig.Regex)
 		if err != nil {
-			fmt.Println("Error compiling regex: " + err.Error())
+			m.logger("Error compiling regex: "+err.Error(), "Manager.AnalyseDetectSDKs")
 			continue
 		}
 		compiledSignatures = append(compiledSignatures, struct {
@@ -529,6 +550,9 @@ func (m *Manager) AnalyseDetectSDKs(classlist []string) map[string][]string {
 	type Detection struct {
 		SDKName   string
 		ClassName string
+		Detail    string
+		Website   string
+		Link      string
 	}
 
 	// Set up worker pool and channels for concurrent processing, Limit number of workers to avoid overwhelming the system
@@ -552,6 +576,9 @@ func (m *Manager) AnalyseDetectSDKs(classlist []string) map[string][]string {
 						detectionsChan <- Detection{
 							SDKName:   sig.Signature.Name,
 							ClassName: className,
+							Detail:    sig.Signature.Detail,
+							Website:   sig.Signature.Website,
+							Link:      sig.Signature.Link,
 						}
 					}
 				}

@@ -9,6 +9,7 @@ node_modules
 test_files/
 tmp/
 output/
+todo.md
 
 # App config (contains user-specific paths and credentials)
 settings.json

@@ -9,6 +9,13 @@ AppMonitor is an application monitoring tool that provides real-time insights in
 - **Apple ID**: Highly recommended to use a spare account to avoid issues with your primary account
 - **Cable**: USB-A to Lightning cable (USB-C to Lightning can be unstable)
 
+## Caveats
+**The tool is a proof of concept and may have bugs or incomplete features.** If something does not work as expected, please report it in the issues section or make a pull request.
+- As of August, Apple has (again) changed the authentication for itunes, meaning that the purchase (optaining licenses), and download of apps from the App Store is currently broken. We are working on a solution, but it is not yet implemented.
+
+### Jailbreak Issues
+Some apps will not run on jailbroken devices due to jailbreak detection mechanisms. In such cases, the tool will not be able to perform dynamic analysis. We are working on a solution to bypass jailbreak detection, but it is not yet implemented and has been deprioritized due to the complexity of the task. If you encounter an app that does not run on a jailbroken device, please report it in the issues section.
+
 ## Methodology
 This tool uses two analytical approaches:
 - **Static Analysis**: Identification of known SDKs used by an app
@@ -20,11 +27,7 @@ For detailed methodology, see [Monitoring infrastructural power: Methodological 
 ## Citation
 If you use this software, please cite the provided research paper.
 
-## Caveats
-**The tool is a proof of concept and may have bugs or incomplete features.** If something does not work as expected, please report it in the issues section or make a pull request.
 
-### Jailbreak Issues
-Some apps will not run on jailbroken devices due to jailbreak detection mechanisms. In such cases, the tool will not be able to perform dynamic analysis. We are working on a solution to bypass jailbreak detection, but it is not yet implemented and has been deprioritized due to the complexity of the task. If you encounter an app that does not run on a jailbroken device, please report it in the issues section.
 
 ## Tech Stack
 

@@ -74,7 +74,7 @@
                         <tr v-for="item in results" :key="`${item.trackId}-${item.bundleId}`" class="result-row"
                             @click="handleSelectItem(item)">
                             <td>
-                                <img v-if="item.artworkUrl100" :src="item.artworkUrl100" :alt="`${item.trackName} logo`"
+                                <img v-if="item.artworkUrl512" :src="item.artworkUrl512" :alt="`${item.trackName} logo`"
                                     class="result-logo" />
                             </td>
                             <td>{{ item.trackName }}</td>
@@ -254,7 +254,7 @@ async function handleLoadFromPhone() {
 // Tells Go which app is selected (sets BundleID + Name), then clears the results table
 async function handleSelectItem(item) {
     try {
-        await SelectItem(item.trackName, item.trackId, item.bundleId, item.artworkUrl100, item.sellerName, item.artistViewUrl, item.description)
+        await SelectItem(item.trackName, item.trackId, item.bundleId, item.artworkUrl512, item.sellerName, item.artistViewUrl, item.description)
         searchTerm.value = `${item.trackName} (${item.bundleId})`
         placeholder.value = item.trackName
         results.value = []
