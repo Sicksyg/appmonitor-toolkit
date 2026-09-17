@@ -58,24 +58,8 @@ type App struct {
 	iosClassLogPath   string
 }
 
-// AppInfo struct to hold app information and installation details for the analysis
-type AppInfo struct {
-	Name               string
-	BundleID           string
-	InstallPath        string
-	UDID               string
-	ArtworkUrl         string
-	SellerName         string
-	ArtistViewUrl      string
-	Description        string
-	AppStoreURL        string
-	AppStoreIconPath   string
-	InstalledApps      []helpers.InstalledApp
-	ResultsPath        string
-	SDKs               map[string][]string
-	IosPermissions     map[string]models.IosPermissionDetail
-	AndroidPermissions map[string]models.AndroidPermissionDetail
-}
+// AppInfo struct alias from models for app information and installation details
+type AppInfo = models.AppInfo
 
 // AnalysisStatus struct to hold analysis status
 type AnalysisStatus struct {
@@ -451,7 +435,7 @@ func (a *App) StartIosAnalysis() {
 	a.Log("Analysis complete! Report saved to: "+reportPath, "App.StartAnalysis")
 
 	// push to database
-
+	a.CreateAndPushToDatabase()
 }
 
 // ------------------------- Main Android analysis flow ----------------------- //
@@ -507,6 +491,7 @@ func (a *App) StartAndroidAnalysis() {
 
 	a.emitStatus("done", "Analysis complete", 100)
 	a.Log("Android analysis complete for: "+a.appinfo.BundleID, "App.StartAndroidAnalysis")
+	a.CreateAndPushToDatabase()
 }
 
 // --------------------------------------------------------------- //
@@ -732,6 +717,15 @@ func (a *App) ClearTmpDir() {
 			a.Log("Error removing temporary file: "+err.Error(), "App.ClearTmpDir")
 		}
 	}
+}
+
+func (a *App) OpenAppInAppStore() {
+	// This function opens the app's App Store URL on the device using Frida.
+	if a.appinfo.AppStoreURL == "" {
+		a.Log("No App Store URL available for the selected app", "App.OpenAppInAppStore")
+		return
+	}
+	a.iosMgr.OpenAppInAppStore(a.appinfo.UDID, a.appinfo.BundleID, a.appinfo.AppStoreURL)
 }
 
 func (a *App) CreateAndPushToDatabase() {

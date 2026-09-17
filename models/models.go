@@ -1,5 +1,7 @@
 package models
 
+import "AppMonitor/helpers"
+
 // IosPermissionDetail struct to hold enriched permission information
 // Used by both analysis and report packages to maintain clean separation
 type IosPermissionDetail struct {
@@ -32,6 +34,26 @@ type AndroidSdkDetail struct {
 // ExodusTrackerFile struct to represent the structure of the Exodus tracker data file. This allows for easy loading and access.
 type ExodusTrackerFile struct {
 	Trackers map[string]AndroidSdkDetail `json:"trackers"`
+}
+
+// InstalledApp represents an app installed on a device
+// AppInfo struct to hold app information and installation details for the analysis
+type AppInfo struct {
+	Name               string                             `json:"name"`
+	BundleID           string                             `json:"bundleId"`
+	InstallPath        string                             `json:"installPath,omitempty"`
+	UDID               string                             `json:"udid,omitempty"`
+	ArtworkUrl         string                             `json:"artworkUrl,omitempty"`
+	SellerName         string                             `json:"sellerName,omitempty"`
+	ArtistViewUrl      string                             `json:"artistViewUrl,omitempty"`
+	Description        string                             `json:"description,omitempty"`
+	AppStoreURL        string                             `json:"appStoreUrl,omitempty"`
+	AppStoreIconPath   string                             `json:"appStoreIconPath,omitempty"`
+	InstalledApps      []helpers.InstalledApp             `json:"installedApps,omitempty"`
+	ResultsPath        string                             `json:"resultsPath,omitempty"`
+	SDKs               map[string][]string                `json:"sdks,omitempty"`
+	IosPermissions     map[string]IosPermissionDetail     `json:"iosPermissions,omitempty"`
+	AndroidPermissions map[string]AndroidPermissionDetail `json:"androidPermissions,omitempty"`
 }
 
 // Settings structs for app configuration persisted to disk.

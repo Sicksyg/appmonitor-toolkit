@@ -24,6 +24,9 @@
                         {{ loading ? 'Searching...' : 'Search' }}
                     </button>
                 </div>
+                <button class="btn tertiary" type="button" @click="openAppstoreUrl" :disabled="loading">
+                    Open in App Store
+                </button>
             </div>
 
             <div class="action-row wrap">
@@ -291,6 +294,25 @@ async function openReport() {
     } catch (error) {
         console.error('Failed to open report:', error)
         statusMessage.value = 'Failed to open report.'
+    }
+}
+
+async function openAppstoreUrl() {
+    if (!searchTerm.value.trim()) {
+        resultsMessage.value = 'Enter a search term first.'
+        return
+    }
+
+    loading.value = true
+    resultsMessage.value = 'Opening in App Store...'
+    try {
+        await OpenAppInAppStore(searchTerm.value.trim())
+        resultsMessage.value = ''
+    } catch (error) {
+        console.error(error)
+        resultsMessage.value = 'Failed to open in App Store.'
+    } finally {
+        loading.value = false
     }
 }
 

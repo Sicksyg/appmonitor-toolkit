@@ -662,3 +662,55 @@ func (m *Manager) Cleanup() error {
 	}
 	return nil
 }
+
+func (m *Manager) OpenAppInAppStore(udid string, bundleID string, AppStoreURL string) {
+	// Function to open the appstore on ios device using frida.
+	// "trackViewUrl": "https://apps.apple.com/dk/app/mobilbank-middelfartsparekasse/id1466762662?uo=4"
+
+	// Step 1: Setup Frida
+	if err := m.FridaSetup(udid, bundleID); err != nil {
+		m.logger("Frida setup failed: "+err.Error(), "Manager.OpenAppInAppStore")
+		return
+	}
+	defer func() {
+		if err := m.Cleanup(); err != nil {
+			m.logger("Frida cleanup failed: "+err.Error(), "Manager.OpenAppInAppStore")
+		}
+	}()
+
+	comp := frida.NewCompiler()
+	comp.On("diagnostics", func(diag string) {
+		m.logger("Compiler diagnostics: "+diag, "Manager.OpenAppInAppStore")
+	})
+
+	bopts := frida.NewCompilerOptions()
+	bopts.SetProjectRoot(m.fridaRoot)
+	bopts.SetSourceMaps(frida.SourceMapsOmitted)
+	bopts.SetJSCompression(frida.JSCompressionTerser)
+
+	compiledScript, err := comp.Build("frida_open_appstore.js", bopts)
+	if err != nil {
+		m.logger("Error compiling script: "+err.Error(), "Manager.OpenAppInAppStore")
+		return
+	}
+
+	// Create and load the script before invoking its RPC exports.
+	fridaScript, err := m.fridaData.session.CreateScript(compiledScript)
+	if err != nil {
+		m.logger("Error creating App Store script: "+err.Error(), "Manager.OpenAppInAppStore")
+		return
+	}
+	defer fridaScript.Clean()
+
+	if err := fridaScript.Load(); err != nil {
+		m.logger("Error loading App Store script: "+err.Error(), "Manager.OpenAppInAppStore")
+		return
+	}
+
+	activation := fridaScript.ExportsCall("openurl", AppStoreURL)
+	if activation == nil {
+		m.logger("Error calling openurl: nil activation", "Manager.OpenAppInAppStore")
+		return
+	}
+	m.logger(fmt.Sprintf("App Store RPC result: %v", activation), "Manager.OpenAppInAppStore")
+}
