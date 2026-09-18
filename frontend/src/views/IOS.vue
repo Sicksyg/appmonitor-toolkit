@@ -136,7 +136,7 @@
 <script setup>
 import { onBeforeUnmount, onMounted, ref, computed } from 'vue'
 import { EventsOn, EventsOff, ClipboardSetText } from '../../wailsjs/runtime/runtime'
-import { LoadAppList, LoadFromPhone, ItunesSearchWild, SelectItem, StartIosAnalysis, OpenReportFileInDefaultApp } from '../../wailsjs/go/main/App'
+import { LoadAppList, LoadFromPhone, ItunesSearchWild, SelectItem, StartIosAnalysis, OpenReportFileInDefaultApp, OpenAppInAppStore } from '../../wailsjs/go/main/App'
 import AppIcon from '../components/AppIcon.vue'
 
 // --- State ---
@@ -257,7 +257,7 @@ async function handleLoadFromPhone() {
 // Tells Go which app is selected (sets BundleID + Name), then clears the results table
 async function handleSelectItem(item) {
     try {
-        await SelectItem(item.trackName, item.trackId, item.bundleId, item.artworkUrl512, item.sellerName, item.artistViewUrl, item.description)
+        await SelectItem(item.trackName, item.trackId, item.bundleId, item.artworkUrl512, item.sellerName, item.artistViewUrl, item.description, item.trackViewUrl)
         searchTerm.value = `${item.trackName} (${item.bundleId})`
         placeholder.value = item.trackName
         results.value = []
@@ -302,12 +302,11 @@ async function openAppstoreUrl() {
         resultsMessage.value = 'Enter a search term first.'
         return
     }
-
     loading.value = true
     resultsMessage.value = 'Opening in App Store...'
     try {
-        await OpenAppInAppStore(searchTerm.value.trim())
-        resultsMessage.value = ''
+        await OpenAppInAppStore()
+        resultsMessage.value = 'Trying to open App in App Store...'
     } catch (error) {
         console.error(error)
         resultsMessage.value = 'Failed to open in App Store.'

@@ -123,7 +123,7 @@ async function handleSearch() {
 // Tells Go which app is selected (sets BundleID + Name), then clears the results table
 async function handleSelectItem(item) {
     try {
-        await SelectItem(item.trackName, item.trackId, item.bundleId, item.artworkUrl100, item.sellerName, item.artistViewUrl, item.description)
+        await SelectItem(item.trackName, item.trackId, item.bundleId, item.artworkUrl100, item.sellerName, item.artistViewUrl, item.description, item.trackViewUrl)
         searchTerm.value = `${item.trackName} (${item.bundleId})`
         placeholder.value = item.trackName
         results.value = []

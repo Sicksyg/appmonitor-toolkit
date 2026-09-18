@@ -37,6 +37,7 @@ type StoreResult struct {
 	ArtistViewURL string `json:"artistViewUrl"`
 	ArtworkURL    string `json:"artworkUrl512"`
 	Description   string `json:"description"`
+	TrackViewUrl  string `json:"trackViewUrl"`
 }
 
 func (a *Manager) fetchItunesResults(url string) string {
@@ -124,6 +125,7 @@ func (m *Manager) GooglePlayDetails(bundleID string) StoreResult {
 	if details.Description == "" {
 		details.Description = strings.TrimSpace(doc.Find("meta[name='description']").First().AttrOr("content", ""))
 	}
+	details.TrackViewUrl = playURL
 
 	return details
 }

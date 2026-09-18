@@ -60,7 +60,7 @@
         "id": 6
     },
     {
-        "regex": "Fabric|Crashlytics|FIRCrashlytics",
+        "regex": "Crashlytics|FIRCrashlytics",
         "domain_regex": "",
         "name": "Google CrashLytics",
         "comment": "SDK for Crashlytics, a crash-reporting service (part of Firebase), automatically collects crash data and groups similar crashes together.",

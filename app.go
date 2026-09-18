@@ -370,7 +370,7 @@ func (a *App) setupOutputPaths() error {
 // ------------------------- Frida analysis functions ----------------------- //
 
 func (a *App) DownloadAndInstall(udid string, bundleID string) error {
-	return a.helpersMgr.DownloadAndInstall(udid, bundleID, a.settings.Auth.AppleEmail, a.settings.Auth.ApplePassword, a.tmpPath)
+	return a.helpersMgr.DownloadAndInstall(udid, bundleID, a.settings.Auth.AppleEmail, a.settings.Auth.ApplePassword, a.tmpIpaPath)
 }
 
 // ------------------------- Main iOS analysis flow ----------------------- //
@@ -381,6 +381,7 @@ func (a *App) StartIosAnalysis() {
 	// Reset AppInfo struct for fresh analysis
 	a.appinfo.SDKs = make(map[string][]string)
 	a.appinfo.IosPermissions = make(map[string]models.IosPermissionDetail)
+	a.appinfo.BundleInfo = make(map[string]any)
 	a.appinfo.ResultsPath = ""
 
 	a.emitStatus("download", "Downloading and installing", 10)
@@ -392,7 +393,7 @@ func (a *App) StartIosAnalysis() {
 	}
 
 	a.emitStatus("frida", "Running Frida analysis", 35)
-	enrichedPermissions, sdks, err := a.iosMgr.RunCompleteAnalysis(a.appinfo.UDID, a.appinfo.BundleID)
+	enrichedPermissions, sdks, bundleInfo, err := a.iosMgr.RunCompleteAnalysis(a.appinfo.UDID, a.appinfo.BundleID)
 	if err != nil {
 		a.emitStatus("error", "Frida analysis failed: "+err.Error(), 100)
 		a.Log("Error during frida analysis: "+err.Error(), "App.StartAnalysis")
@@ -403,6 +404,10 @@ func (a *App) StartIosAnalysis() {
 
 	a.appinfo.IosPermissions = enrichedPermissions
 	a.appinfo.SDKs = sdks
+	a.appinfo.BundleInfo = bundleInfo
+	if version, ok := bundleInfo["shortVersion"].(string); ok {
+		a.appinfo.Version = version
+	}
 
 	if err := a.iosMgr.Cleanup(); err != nil {
 		a.emitStatus("cleanup", "Cleanup warning: "+err.Error(), 75)
@@ -546,7 +551,7 @@ func (a *App) SearchGooglePlay(term string) string {
 }
 
 // SelectItem is called when the user selects an app from the search results. It sets the selected app's details in the AppInfo struct for use in the analysis.
-func (a *App) SelectItem(trackName string, trackId int, bundleId string, artworkUrl string, sellerName string, artistViewUrl string, description string) {
+func (a *App) SelectItem(trackName string, trackId int, bundleId string, artworkUrl string, sellerName string, artistViewUrl string, description string, trackViewUrl string) {
 	a.Log(fmt.Sprintf("Selected item - trackName: %s, trackId: %d, bundleId: %s", trackName, trackId, bundleId), "App.SelectItem")
 	// set the AppStruct to the selected item
 	a.appinfo.Name = trackName
@@ -555,6 +560,7 @@ func (a *App) SelectItem(trackName string, trackId int, bundleId string, artwork
 	a.appinfo.SellerName = sellerName
 	a.appinfo.ArtistViewUrl = artistViewUrl
 	a.appinfo.Description = description
+	a.appinfo.AppStoreURL = trackViewUrl
 
 	a.appinfo.AppStoreIconPath = a.helpersMgr.DownloadAndSaveAppIcon(artworkUrl, bundleId)
 
@@ -725,45 +731,37 @@ func (a *App) OpenAppInAppStore() {
 		a.Log("No App Store URL available for the selected app", "App.OpenAppInAppStore")
 		return
 	}
-	a.iosMgr.OpenAppInAppStore(a.appinfo.UDID, a.appinfo.BundleID, a.appinfo.AppStoreURL)
+	if a.appinfo.UDID == "" {
+		a.appinfo.UDID = a.helpersMgr.GetUDID()
+	}
+	if a.appinfo.UDID == "" {
+		a.Log("No connected iOS device UDID available", "App.OpenAppInAppStore")
+		return
+	}
+	a.Log("Opening app in App Store: "+a.appinfo.AppStoreURL, "App.OpenAppInAppStore")
+	a.iosMgr.OpenAppInAppStore(a.appinfo.UDID, a.appinfo.AppStoreURL)
 }
 
 func (a *App) CreateAndPushToDatabase() {
-	// Creaste a database json file with results from analysis (AppInfo struct) if it doesn't exist
-	dbPath := filepath.Join(a.outputPath, "app_database.json")
-	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
-			a.Log("Error creating database directory: "+err.Error(), "App.CreateAndPushToDatabase")
-			return
-		}
-		initialData := make(map[string]AppInfo)
-		initialBytes, err := json.MarshalIndent(initialData, "", "  ")
-		if err != nil {
-			a.Log("Error creating initial database JSON: "+err.Error(), "App.CreateAndPushToDatabase")
-			return
-		}
-		if err = os.WriteFile(dbPath, initialBytes, 0644); err != nil {
-			a.Log("Error writing initial database file: "+err.Error(), "App.CreateAndPushToDatabase")
-			return
-		}
-		a.Log("Created new database file at: "+dbPath, "App.CreateAndPushToDatabase")
-	}
-
-	// Load existing database
-	dbFile, err := os.ReadFile(dbPath)
-	if err != nil {
-		a.Log("Error reading database file: "+err.Error(), "App.CreateAndPushToDatabase")
+	dbPath := filepath.Join(a.reportPath, "app_database.json")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		a.Log("Error creating database directory: "+err.Error(), "App.CreateAndPushToDatabase")
 		return
 	}
 
-	var database map[string]AppInfo
-	if err = json.Unmarshal(dbFile, &database); err != nil {
+	dbFile, err := os.ReadFile(dbPath)
+	if err != nil && !os.IsNotExist(err) {
+		a.Log("Error reading database file: "+err.Error(), "App.CreateAndPushToDatabase")
+		return
+	}
+	database, err := models.DecodeAnalysisDatabase(dbFile)
+	if err != nil {
 		a.Log("Error parsing database file: "+err.Error(), "App.CreateAndPushToDatabase")
 		return
 	}
 
-	// Add current app info to database
-	database[a.appinfo.BundleID] = a.appinfo
+	a.appinfo.AnalysisDate = time.Now().UTC().Format(time.RFC3339)
+	database[a.appinfo.BundleID] = append(database[a.appinfo.BundleID], a.appinfo)
 
 	// Save updated database to disk
 	dbBytes, err := json.MarshalIndent(database, "", "  ")

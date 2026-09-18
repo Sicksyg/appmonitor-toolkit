@@ -1,6 +1,10 @@
 package models
 
-import "AppMonitor/helpers"
+import (
+	"AppMonitor/helpers"
+	"encoding/json"
+	"fmt"
+)
 
 // IosPermissionDetail struct to hold enriched permission information
 // Used by both analysis and report packages to maintain clean separation
@@ -51,9 +55,45 @@ type AppInfo struct {
 	AppStoreIconPath   string                             `json:"appStoreIconPath,omitempty"`
 	InstalledApps      []helpers.InstalledApp             `json:"installedApps,omitempty"`
 	ResultsPath        string                             `json:"resultsPath,omitempty"`
+	Version            string                             `json:"version,omitempty"`
+	AnalysisDate       string                             `json:"analysisDate"`
 	SDKs               map[string][]string                `json:"sdks,omitempty"`
 	IosPermissions     map[string]IosPermissionDetail     `json:"iosPermissions,omitempty"`
+	BundleInfo         map[string]any                     `json:"bundleInfo,omitempty"`
 	AndroidPermissions map[string]AndroidPermissionDetail `json:"androidPermissions,omitempty"`
+}
+
+// AnalysisDatabase keeps a history of dated analysis records for each bundle ID.
+type AnalysisDatabase map[string][]AppInfo
+
+// DecodeAnalysisDatabase accepts both the current history format and the
+// previous single-record format so existing database files remain usable.
+func DecodeAnalysisDatabase(data []byte) (AnalysisDatabase, error) {
+	if len(data) == 0 {
+		return make(AnalysisDatabase), nil
+	}
+
+	var rawEntries map[string]json.RawMessage
+	if err := json.Unmarshal(data, &rawEntries); err != nil {
+		return nil, fmt.Errorf("decode database: %w", err)
+	}
+
+	database := make(AnalysisDatabase, len(rawEntries))
+	for bundleID, rawEntry := range rawEntries {
+		var history []AppInfo
+		if err := json.Unmarshal(rawEntry, &history); err == nil {
+			database[bundleID] = history
+			continue
+		}
+
+		var record AppInfo
+		if err := json.Unmarshal(rawEntry, &record); err != nil {
+			return nil, fmt.Errorf("decode record for %s: %w", bundleID, err)
+		}
+		database[bundleID] = []AppInfo{record}
+	}
+
+	return database, nil
 }
 
 // Settings structs for app configuration persisted to disk.

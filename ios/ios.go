@@ -22,6 +22,7 @@ type FridaData struct {
 	session *frida.Session
 	script  *frida.Script
 	pid     int
+	spawned bool
 }
 
 // Signature struct to hold SDK signature information
@@ -56,6 +57,8 @@ type Paths struct {
 	FridaRoot    string
 	ClassLogPath string
 }
+
+const safariBundleID = "com.apple.mobilesafari"
 
 // NewManager creates a new analysis Manager
 func NewManager(logger func(message, function string), paths Paths) *Manager {
@@ -127,7 +130,7 @@ func (m *Manager) FridaSetup(udid string, bundleID string) error {
 	}
 	m.logger(fmt.Sprintf("Using device: %s (%s)", device.Name(), device.ID()), "Manager.FridaSetup")
 
-	// Spawn app and get the pid from the bundleID
+	// Spawn the app and get its PID from the bundle ID.
 	pid, err := device.Spawn(bundleID, nil)
 	if err != nil {
 		m.logger("Error spawning app: "+err.Error(), "Manager.FridaSetup")
@@ -157,6 +160,7 @@ func (m *Manager) FridaSetup(udid string, bundleID string) error {
 		device:  device.(*frida.Device),
 		session: session,
 		pid:     pid,
+		spawned: true,
 	}
 
 	m.logger("Frida setup completed successfully", "Manager.FridaSetup")
@@ -473,11 +477,81 @@ func (m *Manager) LoadSDKSignatures() []SDKSignature {
 	return sdkSignatures
 }
 
-// RunCompleteAnalysis runs the full Frida analysis workflow: setup, permissions, static analysis, and SDK detection
-func (m *Manager) RunCompleteAnalysis(udid, bundleID string) (map[string]models.IosPermissionDetail, map[string][]string, error) {
+func (m *Manager) GetBundleInformation() (map[string]any, error) {
+	if m.fridaData == nil {
+		return nil, fmt.Errorf("frida not initialized, call FridaSetup first")
+	}
+
+	comp := frida.NewCompiler()
+	comp.On("diagnostics", func(diag string) {
+		m.logger("Compiler diagnostics: "+diag, "Manager.GetBundleInformation")
+	})
+
+	bopts := frida.NewCompilerOptions()
+	bopts.SetProjectRoot(m.fridaRoot)
+	bopts.SetSourceMaps(frida.SourceMapsOmitted)
+	bopts.SetJSCompression(frida.JSCompressionTerser)
+
+	compiledScript, err := comp.Build("frida_get_bundledata.js", bopts)
+	if err != nil {
+		m.logger("Error compiling script: "+err.Error(), "Manager.GetBundleInformation")
+		return nil, fmt.Errorf("failed to compile script: %w", err)
+	}
+
+	fridaScript, err := m.fridaData.session.CreateScript(compiledScript)
+	if err != nil {
+		m.logger("Error creating bundle information script: "+err.Error(), "Manager.GetBundleInformation")
+		return nil, fmt.Errorf("failed to create script: %w", err)
+	}
+	defer fridaScript.Clean()
+
+	bundleInfoChan := make(chan map[string]any, 1)
+	fridaScript.On("message", func(msg string) {
+		if bundleInfo := m.parseBundleInformation(msg); bundleInfo != nil {
+			bundleInfoChan <- bundleInfo
+		}
+	})
+
+	if err := fridaScript.Load(); err != nil {
+		m.logger("Error loading bundle information script: "+err.Error(), "Manager.GetBundleInformation")
+		return nil, fmt.Errorf("failed to load script: %w", err)
+	}
+
+	select {
+	case bundleInfo := <-bundleInfoChan:
+		m.logger(fmt.Sprintf("Found %d bundle information fields", len(bundleInfo)), "Manager.GetBundleInformation")
+		return bundleInfo, nil
+	case <-time.After(5 * time.Second):
+		m.logger("Timeout waiting for bundle information", "Manager.GetBundleInformation")
+		return make(map[string]any), nil
+	}
+}
+
+func (m *Manager) parseBundleInformation(results string) map[string]any {
+	if results == "" {
+		return nil
+	}
+
+	var msg struct {
+		Type    string         `json:"type"`
+		Payload map[string]any `json:"payload"`
+	}
+	if err := json.Unmarshal([]byte(results), &msg); err != nil {
+		m.logger("Error parsing bundle information JSON: "+err.Error(), "Manager.parseBundleInformation")
+		return nil
+	}
+	if msg.Type != "send" || msg.Payload == nil {
+		return nil
+	}
+
+	return msg.Payload
+}
+
+// RunCompleteAnalysis runs the full Frida analysis workflow: setup, permissions, bundle data, static analysis, and SDK detection.
+func (m *Manager) RunCompleteAnalysis(udid, bundleID string) (map[string]models.IosPermissionDetail, map[string][]string, map[string]any, error) {
 	// Step 1: Setup Frida
 	if err := m.FridaSetup(udid, bundleID); err != nil {
-		return nil, nil, fmt.Errorf("frida setup failed: %w", err)
+		return nil, nil, nil, fmt.Errorf("frida setup failed: %w", err)
 	}
 
 	time.Sleep(time.Second * 1) // brief pause to ensure app is fully started
@@ -485,13 +559,13 @@ func (m *Manager) RunCompleteAnalysis(udid, bundleID string) (map[string]models.
 	// Step 2: Run static analysis to get class list (works while suspended)
 	classList, err := m.AnalyseFridaStatic(bundleID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("static analysis failed: %w", err)
+		return nil, nil, nil, fmt.Errorf("static analysis failed: %w", err)
 	}
 
 	// Step 3: Resume immediately so the OS launch watchdog doesn't kill the
 	// still-suspended process; permission hooks also require the app to run.
 	if err := m.ResumeApp(); err != nil {
-		return nil, nil, fmt.Errorf("resume failed: %w", err)
+		return nil, nil, nil, fmt.Errorf("resume failed: %w", err)
 	}
 
 	// Step 4: Analyze permissions (raw from Frida)
@@ -502,10 +576,17 @@ func (m *Manager) RunCompleteAnalysis(udid, bundleID string) (map[string]models.
 		rawPermissions = make(map[string]string)
 	}
 
-	// Step 5: Detect SDKs from class list (CPU-only, safe to run after resume)
+	// Step 5: Collect Info.plist metadata while the instrumented app is running.
+	bundleInfo, err := m.GetBundleInformation()
+	if err != nil {
+		m.logger("Bundle information analysis failed: "+err.Error(), "Manager.RunCompleteAnalysis")
+		bundleInfo = make(map[string]any)
+	}
+
+	// Step 6: Detect SDKs from class list (CPU-only, safe to run after resume)
 	sdks := m.AnalyseDetectSDKs(classList)
 
-	// Step 6: Enrich permissions with Apple signature data
+	// Step 7: Enrich permissions with Apple signature data
 	enrichedPermissions, err := m.AnalyseDetectPermissions(rawPermissions)
 	if err != nil {
 		m.logger("Permission enrichment failed: "+err.Error(), "Manager.RunCompleteAnalysis")
@@ -514,7 +595,7 @@ func (m *Manager) RunCompleteAnalysis(udid, bundleID string) (map[string]models.
 	}
 
 	m.logger("Complete analysis finished successfully", "Manager.RunCompleteAnalysis")
-	return enrichedPermissions, sdks, nil
+	return enrichedPermissions, sdks, bundleInfo, nil
 }
 
 // AnalyseDetectSDKs detects SDKs in the given class list using signature matching
@@ -647,8 +728,8 @@ func (m *Manager) Cleanup() error {
 		m.fridaData.session.Clean()
 	}
 
-	// Kill the app process
-	if m.fridaData.device != nil && m.fridaData.pid > 0 {
+	// Kill only processes spawned by this manager.
+	if m.fridaData.spawned && m.fridaData.device != nil && m.fridaData.pid > 0 {
 		if err := m.fridaData.device.Kill(m.fridaData.pid); err != nil {
 			m.logger("Error killing app: "+err.Error(), "Manager.Cleanup")
 			errs = append(errs, err)
@@ -663,12 +744,16 @@ func (m *Manager) Cleanup() error {
 	return nil
 }
 
-func (m *Manager) OpenAppInAppStore(udid string, bundleID string, AppStoreURL string) {
+func (m *Manager) OpenAppInAppStore(udid string, AppStoreURL string) {
 	// Function to open the appstore on ios device using frida.
 	// "trackViewUrl": "https://apps.apple.com/dk/app/mobilbank-middelfartsparekasse/id1466762662?uo=4"
+	if strings.TrimSpace(udid) == "" {
+		m.logger("No device UDID supplied; FridaSetup requires an explicit UDID", "Manager.OpenAppInAppStore")
+		return
+	}
 
 	// Step 1: Setup Frida
-	if err := m.FridaSetup(udid, bundleID); err != nil {
+	if err := m.FridaSetup(udid, safariBundleID); err != nil {
 		m.logger("Frida setup failed: "+err.Error(), "Manager.OpenAppInAppStore")
 		return
 	}
@@ -677,6 +762,13 @@ func (m *Manager) OpenAppInAppStore(udid string, bundleID string, AppStoreURL st
 			m.logger("Frida cleanup failed: "+err.Error(), "Manager.OpenAppInAppStore")
 		}
 	}()
+
+	// Frida spawns apps suspended. Resume Safari before loading the script and
+	// calling the RPC so UIApplication can execute the URL open request.
+	if err := m.ResumeApp(); err != nil {
+		m.logger("Safari resume failed: "+err.Error(), "Manager.OpenAppInAppStore")
+		return
+	}
 
 	comp := frida.NewCompiler()
 	comp.On("diagnostics", func(diag string) {
@@ -712,5 +804,6 @@ func (m *Manager) OpenAppInAppStore(udid string, bundleID string, AppStoreURL st
 		m.logger("Error calling openurl: nil activation", "Manager.OpenAppInAppStore")
 		return
 	}
+
 	m.logger(fmt.Sprintf("App Store RPC result: %v", activation), "Manager.OpenAppInAppStore")
 }

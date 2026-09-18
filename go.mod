@@ -4,7 +4,7 @@ go 1.26.1
 
 require (
 	github.com/PuerkitoBio/goquery v1.12.0
-	github.com/frida/frida-go v1.0.2
+	github.com/frida/frida-go v1.1.0
 	github.com/johnfercher/maroto/v2 v2.4.0
 	github.com/wailsapp/wails/v2 v2.13.0
 )

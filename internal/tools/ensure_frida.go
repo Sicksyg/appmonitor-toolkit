@@ -10,7 +10,7 @@ import (
 	"AppMonitor/assets"
 )
 
-const fridaVersion = "v1" // bump when files in assets/frida change
+const fridaVersion = "v2" // bump when files in assets/frida change
 
 // EnsureFridaProject extracts embedded assets/frida to the user's config dir and returns the absolute project root path.
 // Result path: <UserConfigDir>/<appName>/frida

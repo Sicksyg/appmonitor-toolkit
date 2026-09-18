@@ -8,8 +8,6 @@ function openURL(storelink) {
 	return UIApplication.openURL_(toOpen)
 };
 
-
-
 rpc.exports = {
 	openurl: function (storelink) {
 		openURL(storelink);
