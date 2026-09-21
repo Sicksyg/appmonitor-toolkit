@@ -2,6 +2,8 @@
 ## Overview
 AppMonitor is an application monitoring tool that provides real-time insights into application infrastructure and tracking capabilities. At the heart of the tool is the analysis of Software Development Kits (SDKs) - third party infrastructures that enable essential functionality and tracking.
 
+## Application Screenshot
+![AppMonitor Screenshot](AppMonitor_screenshot.png)
 
 ## Requirements
 - **Operating System**: macOS
