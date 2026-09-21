@@ -10,8 +10,7 @@ function openURL(storelink) {
 
 rpc.exports = {
 	openurl: function (storelink) {
-		openURL(storelink);
-		return '[*] Opened appstore at: ' + storelink;
+		return openURL(storelink);
 	},
 	failPlease: function () {
 		oops;

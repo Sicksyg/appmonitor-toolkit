@@ -739,7 +739,7 @@ func (r *CLIRunner) pushToDatabase(info models.AppInfo) error {
 	}
 
 	info.AnalysisDate = time.Now().UTC().Format(time.RFC3339)
-	database[info.BundleID] = append(database[info.BundleID], info)
+	database.AddAnalysis(info)
 
 	encoded, err := json.MarshalIndent(database, "", "  ")
 	if err != nil {
@@ -826,8 +826,23 @@ func (r *CLIRunner) waitForManualDownload(storeURL, bundleID, udid string) error
 		return fmt.Errorf("⚠️manual download for %s requires interactive mode; omit -auto or -no-interactive", bundleID)
 	}
 
-	fmt.Printf("🛍️  Opening %s in the iPhone App Store...\n", bundleID)
-	r.iosMgr.OpenAppInAppStore(udid, storeURL)
+	const maxOpenAttempts = 3
+	var openErr error
+	for attempt := 1; attempt <= maxOpenAttempts; attempt++ {
+		fmt.Printf("🛍️  Opening %s in the iPhone App Store (attempt %d/%d)...\n", bundleID, attempt, maxOpenAttempts)
+		openErr = r.iosMgr.OpenAppInAppStore(udid, storeURL)
+		if openErr == nil {
+			break
+		}
+		r.Log(fmt.Sprintf("App Store launch attempt %d failed: %v", attempt, openErr), "CLI.waitForManualDownload")
+		if attempt < maxOpenAttempts {
+			time.Sleep(time.Second)
+		}
+	}
+	if openErr != nil {
+		return fmt.Errorf("⚠️open App Store after %d attempts: %w", maxOpenAttempts, openErr)
+	}
+
 	fmt.Println("\n 💾 Please download and install the app on the iPhone, then press Enter to continue.")
 	if !r.scanner.Scan() {
 		return fmt.Errorf("⚠️waiting for manual download was interrupted")

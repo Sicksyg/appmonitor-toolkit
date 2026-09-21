@@ -74,19 +74,35 @@ func TestPushToDatabasePersistsAppInfo(t *testing.T) {
 	if err := json.Unmarshal(data, &database); err != nil {
 		t.Fatalf("database is not valid JSON: %v", err)
 	}
-	history, ok := database[info.BundleID]
+	appHistory, ok := database[info.BundleID]
 	if !ok {
 		t.Fatalf("database does not contain %q", info.BundleID)
 	}
-	if len(history) != 1 {
-		t.Fatalf("expected one analysis record, got %d", len(history))
+	stored, ok := appHistory.Versions[info.Version]
+	if !ok {
+		t.Fatalf("database does not contain version %s", info.Version)
 	}
-	stored := history[0]
-	if stored.Name != info.Name || stored.AppStoreURL != info.AppStoreURL || stored.Version != info.Version {
-		t.Errorf("stored app info does not match: %+v", stored)
+	if appHistory.Name != info.Name || appHistory.AppStoreURL != info.AppStoreURL || stored.SDKs["iOS"][0] != "ExampleSDK" {
+		t.Errorf("stored app analysis does not match: %+v", appHistory)
 	}
 	if _, err := time.Parse(time.RFC3339, stored.AnalysisDate); err != nil {
 		t.Errorf("analysis date is not RFC 3339: %q", stored.AnalysisDate)
+	}
+
+	info.SDKs = map[string][]string{"iOS": {"UpdatedSDK"}}
+	if err := runner.pushToDatabase(info); err != nil {
+		t.Fatalf("same-version pushToDatabase returned an error: %v", err)
+	}
+	data, err = os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &database); err != nil {
+		t.Fatalf("database is not valid JSON: %v", err)
+	}
+	stored = database[info.BundleID].Versions[info.Version]
+	if stored.SDKs["iOS"][0] != "UpdatedSDK" {
+		t.Errorf("same-version analysis was not replaced: %+v", stored)
 	}
 
 	info.Version = "1.12.2"
@@ -100,9 +116,25 @@ func TestPushToDatabasePersistsAppInfo(t *testing.T) {
 	if err := json.Unmarshal(data, &database); err != nil {
 		t.Fatalf("database is not valid JSON: %v", err)
 	}
-	history = database[info.BundleID]
-	if len(history) != 2 || history[1].Version != "1.12.2" {
-		t.Errorf("expected two versioned analysis records, got: %+v", history)
+	appHistory = database[info.BundleID]
+	if len(appHistory.Versions) != 2 {
+		t.Errorf("expected records grouped by two versions, got: %+v", appHistory)
+	}
+
+	info.Version = "1.12.0"
+	if err := runner.pushToDatabase(info); err != nil {
+		t.Fatalf("out-of-order pushToDatabase returned an error: %v", err)
+	}
+	data, err = os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &database); err != nil {
+		t.Fatalf("database is not valid JSON: %v", err)
+	}
+	appHistory = database[info.BundleID]
+	if len(appHistory.Versions) != 3 {
+		t.Errorf("expected records grouped by three versions, got: %+v", appHistory)
 	}
 }
 

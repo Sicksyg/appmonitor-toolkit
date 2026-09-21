@@ -739,7 +739,9 @@ func (a *App) OpenAppInAppStore() {
 		return
 	}
 	a.Log("Opening app in App Store: "+a.appinfo.AppStoreURL, "App.OpenAppInAppStore")
-	a.iosMgr.OpenAppInAppStore(a.appinfo.UDID, a.appinfo.AppStoreURL)
+	if err := a.iosMgr.OpenAppInAppStore(a.appinfo.UDID, a.appinfo.AppStoreURL); err != nil {
+		a.Log("Unable to open app in App Store: "+err.Error(), "App.OpenAppInAppStore")
+	}
 }
 
 func (a *App) CreateAndPushToDatabase() {
@@ -761,7 +763,7 @@ func (a *App) CreateAndPushToDatabase() {
 	}
 
 	a.appinfo.AnalysisDate = time.Now().UTC().Format(time.RFC3339)
-	database[a.appinfo.BundleID] = append(database[a.appinfo.BundleID], a.appinfo)
+	database.AddAnalysis(a.appinfo)
 
 	// Save updated database to disk
 	dbBytes, err := json.MarshalIndent(database, "", "  ")

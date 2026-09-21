@@ -63,11 +63,33 @@ type AppInfo struct {
 	AndroidPermissions map[string]AndroidPermissionDetail `json:"androidPermissions,omitempty"`
 }
 
-// AnalysisDatabase keeps a history of dated analysis records for each bundle ID.
-type AnalysisDatabase map[string][]AppInfo
+// AnalysisDatabase keeps analyses grouped by application and version.
+type AnalysisDatabase map[string]AppHistory
 
-// DecodeAnalysisDatabase accepts both the current history format and the
-// previous single-record format so existing database files remain usable.
+// AppHistory contains application metadata and its versioned analysis history.
+type AppHistory struct {
+	Name          string                    `json:"name"`
+	BundleID      string                    `json:"bundleId"`
+	ArtworkURL    string                    `json:"artworkUrl,omitempty"`
+	SellerName    string                    `json:"sellerName,omitempty"`
+	ArtistViewURL string                    `json:"artistViewUrl,omitempty"`
+	Description   string                    `json:"description,omitempty"`
+	AppStoreURL   string                    `json:"appStoreUrl,omitempty"`
+	Versions      map[string]AnalysisRecord `json:"versions"`
+}
+
+// AnalysisRecord contains the data collected during one analysis of an app version.
+type AnalysisRecord struct {
+	AnalysisDate       string                             `json:"analysisDate"`
+	ResultsPath        string                             `json:"resultsPath,omitempty"`
+	SDKs               map[string][]string                `json:"sdks,omitempty"`
+	IosPermissions     map[string]IosPermissionDetail     `json:"iosPermissions,omitempty"`
+	BundleInfo         map[string]any                     `json:"bundleInfo,omitempty"`
+	AndroidPermissions map[string]AndroidPermissionDetail `json:"androidPermissions,omitempty"`
+}
+
+// DecodeAnalysisDatabase accepts the current versioned format and the two
+// earlier formats so existing database files remain usable.
 func DecodeAnalysisDatabase(data []byte) (AnalysisDatabase, error) {
 	if len(data) == 0 {
 		return make(AnalysisDatabase), nil
@@ -80,9 +102,17 @@ func DecodeAnalysisDatabase(data []byte) (AnalysisDatabase, error) {
 
 	database := make(AnalysisDatabase, len(rawEntries))
 	for bundleID, rawEntry := range rawEntries {
+		var appHistory AppHistory
+		if err := json.Unmarshal(rawEntry, &appHistory); err == nil && appHistory.Versions != nil {
+			database[bundleID] = appHistory
+			continue
+		}
+
 		var history []AppInfo
 		if err := json.Unmarshal(rawEntry, &history); err == nil {
-			database[bundleID] = history
+			for _, record := range history {
+				database.AddAnalysis(record)
+			}
 			continue
 		}
 
@@ -90,10 +120,40 @@ func DecodeAnalysisDatabase(data []byte) (AnalysisDatabase, error) {
 		if err := json.Unmarshal(rawEntry, &record); err != nil {
 			return nil, fmt.Errorf("decode record for %s: %w", bundleID, err)
 		}
-		database[bundleID] = []AppInfo{record}
+		database.AddAnalysis(record)
 	}
 
 	return database, nil
+}
+
+// AddAnalysis stores the latest analysis record for an app version.
+func (database AnalysisDatabase) AddAnalysis(record AppInfo) {
+	version := record.Version
+	if version == "" {
+		version = "unknown"
+	}
+
+	appHistory := database[record.BundleID]
+	appHistory.Name = record.Name
+	appHistory.BundleID = record.BundleID
+	appHistory.ArtworkURL = record.ArtworkUrl
+	appHistory.SellerName = record.SellerName
+	appHistory.ArtistViewURL = record.ArtistViewUrl
+	appHistory.Description = record.Description
+	appHistory.AppStoreURL = record.AppStoreURL
+	if appHistory.Versions == nil {
+		appHistory.Versions = make(map[string]AnalysisRecord)
+	}
+
+	appHistory.Versions[version] = AnalysisRecord{
+		AnalysisDate:       record.AnalysisDate,
+		ResultsPath:        record.ResultsPath,
+		SDKs:               record.SDKs,
+		IosPermissions:     record.IosPermissions,
+		BundleInfo:         record.BundleInfo,
+		AndroidPermissions: record.AndroidPermissions,
+	}
+	database[record.BundleID] = appHistory
 }
 
 // Settings structs for app configuration persisted to disk.
