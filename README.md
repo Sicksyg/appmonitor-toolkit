@@ -12,9 +12,93 @@ AppMonitor is an application monitoring tool that provides real-time insights in
 - **Cable**: USB-A to Lightning cable (USB-C to Lightning can be unstable)
 
 ### iOS Runtime Setup
-AppMonitor uses Frida to inspect a running iOS app. Before running an iOS analysis, install and start a `frida-server` on the jailbroken device. The server version must be compatible with the Frida version used by AppMonitor. Connect the device to the Mac by USB before starting an analysis.
+AppMonitor runs `am_scanner` on the jailbroken iPhone over USB SSH. For a
+newly installed or updated app, it runs `am_scanner` first and then the
+optional Frida analysis. Install `am_scanner` on the phone before analyzing
+apps. Frida is only required for the Frida pass; install and start a compatible
+`frida-server` on the device if you want that pass. Connect the device to the
+Mac by USB before starting an analysis.
+
+If the selected app is already installed, AppMonitor asks whether to install the
+latest version, analyze the installed app with trackerscan only, or cancel.
+Choosing the installed app skips download and installation and does not start
+Frida.
 
 The distributed AppMonitor application includes its required macOS-side tools. End users do not need to install the Frida development kit, Go, or Frida headers and libraries on their Mac.
+
+### am_scanner and compatibility installation
+`am_scanner` is the on-device scanner forked from
+[TrackerControl/trackerscan-ios](https://github.com/TrackerControl/trackerscan-ios).
+AppMonitor invokes it over SSH using `--list --json` to load installed app
+names, bundle IDs, versions, and optional icons, and `--dump <bundleID>` to
+collect class names, framework names, plist tokens, permissions, bundle
+metadata, and privacy-manifest evidence. AppMonitor decodes the JSON and
+matches the evidence against its local iOS SDK signatures.
+
+Install the `am_scanner` package on the jailbroken phone first. Its source
+repository includes a standalone `scripts/deploy.sh` and `scripts/ios-ssh.sh`,
+so deployment does not require AppMonitor to be installed first. The deploy
+helper uses an SSH host alias (default `ios`) and starts or reuses `iproxy`.
+On macOS, install `iproxy` with `brew install libusbmuxd`; configure the SSH
+alias to use the USB-forwarded endpoint (`127.0.0.1`, port `2222`) and the
+device's SSH user and credentials. The helper supports
+`AM_SCANNER_IOS_SSH_HOST`, `AM_SCANNER_IOS_SSH_SCRIPT`, and
+`AM_SCANNER_IPROXY_PATH` overrides. See the
+[am_scanner repository](https://github.com/Sicksyg/am_scanner) for build and
+deployment instructions.
+
+When AppMonitor connects, it configures its own persistent OpenSSH
+multiplexing connection and reuses it for scanner commands. On first use, it
+opens Terminal to create and authorize an AppMonitor-specific SSH key. The
+first-time key authorization and host-key verification steps are described
+below.
+
+On first use, AppMonitor opens Terminal to create a dedicated Ed25519 key for
+the current macOS user and authorize its public key on the phone. Choose a key
+passphrase when prompted; `ssh-add --apple-use-keychain` stores it in the
+macOS Keychain. OpenSSH then asks for the phone's SSH password once to add the
+public key to `authorized_keys`; AppMonitor does not collect or store that
+password. Later launches use the key through the macOS SSH agent. The private
+key remains in the user's Application Support directory with owner-only
+permissions; no private key is bundled or shared between users. Keep SSH host
+key verification enabled and verify the phone's host-key fingerprint when
+OpenSSH prompts. To revoke access, remove the AppMonitor public-key line from
+the phone's `~/.ssh/authorized_keys` and delete the local
+`~/Library/Application Support/AppMonitor/ssh/` key directory.
+
+For remote `am_scanner` execution, AppMonitor adds the common rootless and
+rootful jailbreak executable directories to the non-interactive SSH command's
+`PATH`, including `/var/jb/usr/local/bin` where the provided Theos package
+installs `am_scanner`.
+
+For apps whose selected iTunes lookup declares iOS 16.x through 18.x as the
+minimum, AppMonitor prepares the downloaded IPA in Go, then installs it with
+the bundled `ideviceinstaller`. If installation fails and the IPA contains
+incompatible app extensions, AppMonitor prunes those extensions and retries
+once. Apps requiring iOS 19 or later are reported as unsupported. IPA
+preparation uses macOS `ditto` for archive handling and `ldid` only when a
+Mach-O minimum-OS field must be changed and re-signed. See
+[the compatibility preparation notes](./scripts/prune_install_README.md).
+
+The AppMonitor SSH helper script is embedded in the application. Override its
+path or the remote scanner executable with `APPMONITOR_IOS_SSH_SCRIPT` and
+`APPMONITOR_TRACKERSCAN_COMMAND`, respectively. The default remote executable
+is `am_scanner`. `APPMONITOR_DITTO_PATH` can
+select a non-default `ditto` executable, `APPMONITOR_LDID_PATH` can select an
+`ldid` executable, and `APPMONITOR_COMPATIBLE_EXTENSION_POINTS` can provide a
+whitespace-separated extension-point allowlist.
+The iOS workflow and `am_scanner` integration live in `ios/ios.go`; the
+retained Frida implementation lives separately in `ios/frida.go`. Scanner JSON
+evidence is saved beside the iOS reports, and its class/framework evidence is
+matched against AppMonitor's existing iOS SDK signatures. A scanner failure is
+shown as a warning and does not prevent the Frida pass from running.
+
+The standalone CLI defaults to `am_scanner`-only analysis for iOS. It saves
+the complete scanner JSON under `ios/trackerscan/` and writes class names,
+one per line, under `ios/classlogs/`. Use `--frida` to additionally run the
+Frida analysis. When `--manual-download` is used, the CLI opens the App Store
+link on the phone over SSH with `uiopen`. The CLI accepts the same
+`APPMONITOR_IOS_SSH_SCRIPT` and `APPMONITOR_TRACKERSCAN_COMMAND` overrides.
 
 ## Caveats
 **The tool is a proof of concept and may have bugs or incomplete features.** If something does not work as expected, please report it in the issues section or make a pull request.
@@ -96,6 +180,73 @@ The development kit is required only to compile AppMonitor. It is not required b
 
 ```sh
 wails build
+```
+
+#### Homebrew helper tools and release build
+
+The release script stages AppMonitor's macOS helper tools and their non-system
+dylib dependency closure from Homebrew before building. Install the required
+formulae if they are not already available:
+
+```sh
+brew install libimobiledevice libusbmuxd ipatool ldid
+```
+
+Then run:
+
+```sh
+scripts/build-release.sh
+```
+
+The script resolves `ideviceinstaller`, `idevice_id`, and `ideviceinfo` from
+`libimobiledevice`, plus `iproxy` from `libusbmuxd`, and `ipatool` and `ldid`
+from their own formulae. It recursively lists required non-system dylibs first, copies the tools and
+libraries into `assets/bin/darwin-<arch>/` and `assets/lib/darwin-<arch>/`,
+then rewrites Homebrew install names and runtime paths for AppMonitor's
+extracted layout. Finally, it ad-hoc signs each copied Mach-O after patching
+and runs the Wails and CLI builds.
+The bundled `iproxy` path is passed to the SSH helper when AppMonitor launches
+the USB tunnel, so Finder-launched builds do not depend on Homebrew being in
+the app's `PATH`. When running `scripts/ios-ssh.sh` manually, it still falls
+back to `iproxy` found on `PATH`.
+During restaging it removes each previous destination before copying its
+replacement, so files left read-only or root-owned by an earlier privileged
+build can be refreshed as long as the `assets/bin` and `assets/lib`
+architecture directories remain writable.
+
+To stage and sign the tools without building or launching the app:
+
+```sh
+scripts/build-release.sh --stage-only
+```
+
+The script stages only the current Homebrew architecture (`arm64` on Apple
+Silicon or `amd64` on Intel); it does not make universal binaries. Staging
+requires the Xcode command-line tools, including `otool`, `install_name_tool`,
+`lipo`, and `codesign`. The ad-hoc signatures are for the rewritten local
+tools, not Developer ID distribution signatures. `APPMONITOR_ASSET_ROOT` can
+be set to a temporary asset directory when validating the staging phase.
+Normal build mode also clears the generated AppMonitor report directory and
+cached `bin`, `frida`, and `lib` folders under Application Support before
+building.
+
+If Wails reports `permission denied` for `build/bin` or macOS cannot open the
+generated app with `NSCocoaErrorDomain Code=257`, check whether the output was
+created by running a previous build with `sudo`. Restore ownership, then rerun
+the build as your normal user (do not run Homebrew, Wails, or Go with `sudo`):
+
+```sh
+sudo chown -R "$(id -un)" "$PWD/build/bin"
+```
+
+The release script checks whether `build/bin` is writable before staging tools
+and prints this repair command when it detects the problem. It also checks
+that the architecture-specific asset directories are writable before
+restaging; if those directories themselves are not writable, repair ownership
+with:
+
+```sh
+sudo chown -R "$(id -un)" assets/bin assets/lib
 ```
 
 

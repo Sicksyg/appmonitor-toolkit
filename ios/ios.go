@@ -2,31 +2,27 @@ package ios
 
 import (
 	"AppMonitor/assets"
+	"AppMonitor/helpers"
 	"AppMonitor/models"
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/frida/frida-go/frida"
 )
 
-// FridaData struct to hold frida related data to share across methods
-type FridaData struct {
-	device  *frida.Device
-	session *frida.Session
-	script  *frida.Script
-	pid     int
-	spawned bool
-}
-
-// Signature struct to hold SDK signature information
+// SDKSignature holds SDK signature information.
 type SDKSignature struct {
 	Regex       string `json:"regex"`
 	DomainRegex string `json:"domain_regex"`
@@ -48,220 +44,60 @@ type ApplePermissionSignature struct {
 
 // Manager struct to handle analysis operations
 type Manager struct {
-	logger       func(message, function string)
-	fridaData    *FridaData
-	fridaRoot    string
-	classLogPath string
+	logger             func(message, function string)
+	fridaData          *FridaData
+	fridaRoot          string
+	classLogPath       string
+	helpers            *helpers.Manager
+	sshScriptPath      string
+	sshSetupScriptPath string
+	trackerCommand     string
+	ldidPath           string
+	dittoPath          string
+	libPath            string
+	iproxyPath         string
+	sshIdentityPath    string
+	appIconCachePath   string
+	sshControlPath     string
+	sshMaster          *exec.Cmd
+	sshMasterDone      chan error
+	sshReady           chan struct{}
+	sshConnected       bool
+	sshMutex           sync.Mutex
 }
 
 type Paths struct {
-	FridaRoot    string
-	ClassLogPath string
+	FridaRoot          string
+	ClassLogPath       string
+	Helpers            *helpers.Manager
+	SSHScriptPath      string
+	SSHSetupScriptPath string
+	LDIDPath           string
+	DittoPath          string
+	LibPath            string
+	IProxyPath         string
+	SSHIdentityPath    string
+	TrackerScanCommand string
+	AppIconCachePath   string
 }
 
-const safariBundleID = "com.apple.mobilesafari"
-
-// NewManager creates a new analysis Manager
 func NewManager(logger func(message, function string), paths Paths) *Manager {
 	return &Manager{
-		logger:       logger,
-		fridaRoot:    paths.FridaRoot,
-		classLogPath: paths.ClassLogPath,
+		logger:             logger,
+		fridaRoot:          paths.FridaRoot,
+		classLogPath:       paths.ClassLogPath,
+		helpers:            paths.Helpers,
+		sshScriptPath:      paths.SSHScriptPath,
+		sshSetupScriptPath: paths.SSHSetupScriptPath,
+		trackerCommand:     paths.TrackerScanCommand,
+		ldidPath:           paths.LDIDPath,
+		dittoPath:          paths.DittoPath,
+		libPath:            paths.LibPath,
+		iproxyPath:         paths.IProxyPath,
+		sshIdentityPath:    paths.SSHIdentityPath,
+		appIconCachePath:   paths.AppIconCachePath,
+		sshReady:           make(chan struct{}),
 	}
-}
-
-// ResumeApp resumes the spawned-suspended process. Keep the suspended window
-// as short as possible: iOS's launch watchdog kills apps that stay suspended
-// too long, independent of anything Frida does.
-func (m *Manager) ResumeApp() error {
-	if m.fridaData == nil {
-		return fmt.Errorf("frida not initialized, call FridaSetup first")
-	}
-	if err := m.fridaData.device.Resume(m.fridaData.pid); err != nil {
-		m.logger("Error resuming app: "+err.Error(), "Manager.ResumeApp")
-		return fmt.Errorf("failed to resume app: %w", err)
-	}
-	m.logger("App resumed", "Manager.ResumeApp")
-	return nil
-}
-
-func (m *Manager) checkFridaServer(device *frida.Device) error {
-	// Check if frida server is running by enumerating processes on the device
-	processes, err := device.EnumerateProcesses(frida.ScopeMinimal)
-	if err != nil {
-		m.logger("Error enumerating processes: "+err.Error(), "Manager.checkFridaServer")
-		return fmt.Errorf("failed to enumerate processes: %w", err)
-	}
-
-	// check for the process: frida-server
-	for _, proc := range processes {
-		if proc.Name() == "frida-server" {
-			m.logger("Frida server is running", "Manager.checkFridaServer")
-			return nil
-		}
-
-	}
-	return nil
-}
-
-// FridaSetup sets up frida for the given device UDID and app bundleID
-
-func (m *Manager) FridaSetup(udid string, bundleID string) error {
-	// This function sets up frida for the given bundleID
-
-	m.logger(fmt.Sprintf("Setting up Frida for device UDID: %s and bundleID: %s", udid, bundleID), "Manager.FridaSetup")
-
-	// Setup frida device manager
-	mgr := frida.NewDeviceManager()
-
-	// Enumerate devices
-	devices, err := mgr.EnumerateDevices()
-	if err != nil {
-		m.logger("Error enumerating devices: "+err.Error(), "Manager.FridaSetup")
-		return fmt.Errorf("failed to enumerate devices: %w", err)
-	}
-	m.logger(fmt.Sprintf("Found %d devices", len(devices)), "Manager.FridaSetup")
-	_ = devices // device list currently unused
-
-	// get device by UDID
-	device, err := mgr.DeviceByID(udid)
-	if err != nil {
-		m.logger("Error getting device by ID: "+err.Error(), "Manager.FridaSetup")
-		return fmt.Errorf("failed to get device by ID: %w", err)
-	}
-	m.logger(fmt.Sprintf("Using device: %s (%s)", device.Name(), device.ID()), "Manager.FridaSetup")
-
-	// Spawn the app and get its PID from the bundle ID.
-	pid, err := device.Spawn(bundleID, nil)
-	if err != nil {
-		m.logger("Error spawning app: "+err.Error(), "Manager.FridaSetup")
-		m.checkFridaServer(device.(*frida.Device)) // Check if frida server is running and log processes for debugging
-		return fmt.Errorf("failed to spawn app, make sure the frida server is running. If not, add the repo and install the frida-server in Sileo: %w", err)
-	}
-	m.logger(fmt.Sprintf("Spawned app with PID: %d", pid), "Manager.FridaSetup")
-
-	// sleep for a 2 seconds to ensure the app is fully spawned before attaching
-	time.Sleep(2 * time.Second)
-
-	// Attach to app using the pid from above
-	m.logger("Attaching to the app...", "Manager.FridaSetup")
-	session, err := device.Attach(pid, nil)
-	if err != nil {
-		m.logger("Error attaching to app: "+err.Error(), "Manager.FridaSetup")
-		return fmt.Errorf("failed to attach to app: %w", err)
-	}
-
-	// Surfaces the real cause (e.g. app self-killed on Frida detection) instead of a generic "session is gone" error later
-	session.On("detached", func(reason frida.SessionDetachReason, crash *frida.Crash) {
-		m.logger(fmt.Sprintf("Session detached: reason=%s crash=%v", reason, crash), "Manager.FridaSetup")
-	})
-
-	// Set frida data struct
-	m.fridaData = &FridaData{
-		device:  device.(*frida.Device),
-		session: session,
-		pid:     pid,
-		spawned: true,
-	}
-
-	m.logger("Frida setup completed successfully", "Manager.FridaSetup")
-	return nil
-}
-
-// --------------------------- Permission analysis functions ----------------------------- //
-// AnalyseFridaPermissions analyses the app using frida to detect permissions used
-
-func (m *Manager) AnalyseFridaPermissions(bundleID string) (map[string]string, error) {
-	if m.fridaData == nil {
-		return nil, fmt.Errorf("frida not initialized, call FridaSetup first")
-	}
-
-	// Path to frida project must be an absolute path on the local filesystem using path package
-	// projectRoot, err := filepath.Abs(m.fridaRoot)
-	// if err != nil {
-	// 	m.logger("Error getting absolute path: "+err.Error(), "Manager.AnalyseFridaPermissions")
-	// 	return nil, fmt.Errorf("failed to get absolute path: %w", err)
-	// }
-
-	comp := frida.NewCompiler()
-	comp.On("diagnostics", func(diag string) {
-		m.logger("Compiler diagnostics: "+diag, "Manager.AnalyseFridaPermissions")
-	})
-
-	bopts := frida.NewCompilerOptions()
-	bopts.SetProjectRoot(m.fridaRoot)
-	bopts.SetSourceMaps(frida.SourceMapsOmitted)
-	bopts.SetJSCompression(frida.JSCompressionTerser)
-
-	compiledScript, err := comp.Build("frida_permissions.js", bopts)
-	if err != nil {
-		m.logger("Error compiling script: "+err.Error(), "Manager.AnalyseFridaPermissions")
-		return nil, fmt.Errorf("failed to compile script: %w", err)
-	}
-
-	// Create Frida script
-	fridaScript, err := m.fridaData.session.CreateScript(compiledScript)
-	if err != nil {
-		m.logger("Error creating Permission script: "+err.Error(), "Manager.AnalyseFridaPermissions")
-		return nil, fmt.Errorf("failed to create script: %w", err)
-	}
-	defer fridaScript.Clean()
-
-	// Channel to receive permissions results
-	permissionsChan := make(chan map[string]string, 1)
-
-	// Set up message handler
-	fridaScript.On("message", func(msg string) {
-		if permissions := m.parsePermissionsResults(msg); permissions != nil {
-			permissionsChan <- permissions
-		}
-	})
-
-	// Load Frida script into the session
-	if err := fridaScript.Load(); err != nil {
-		m.logger("Error loading script: "+err.Error(), "Manager.AnalyseFridaPermissions")
-		return nil, fmt.Errorf("failed to load script: %w", err)
-	}
-
-	// Wait for results with timeout
-	select {
-	case permissions := <-permissionsChan:
-		m.logger(fmt.Sprintf("Found %d permissions", len(permissions)), "Manager.AnalyseFridaPermissions")
-		return permissions, nil
-	case <-time.After(5 * time.Second):
-		m.logger("Timeout waiting for permissions results", "Manager.AnalyseFridaPermissions")
-		return make(map[string]string), nil // Return empty map instead of error on timeout
-	}
-}
-
-// parsePermissionsResults parses the Frida message and extracts permissions
-func (m *Manager) parsePermissionsResults(results string) map[string]string {
-	if results == "" {
-		return nil
-	}
-
-	// Parse json to get the payload
-	var msg map[string]interface{}
-	if err := json.Unmarshal([]byte(results), &msg); err != nil {
-		m.logger("Error parsing permissions results JSON: "+err.Error(), "Manager.parsePermissionsResults")
-		return nil
-	}
-
-	payload, ok := msg["payload"].(map[string]interface{})
-	if !ok {
-		m.logger("Error: payload is not a map", "Manager.parsePermissionsResults")
-		return nil
-	}
-
-	// Convert to map[string]string
-	permissions := make(map[string]string)
-	for permission, description := range payload {
-		if strVal, ok := description.(string); ok {
-			permissions[permission] = strVal
-		}
-	}
-
-	return permissions
 }
 
 func (m *Manager) LoadPermissionsSignatures() []ApplePermissionSignature {
@@ -333,130 +169,8 @@ func (m *Manager) AnalyseDetectPermissions(appPermissions map[string]string) (ma
 	return enrichedPermissions, nil
 }
 
-// --------------------------- StaticSDK analysis functions ----------------------------- //
-// AnalyseFridaStatic analyses the app using frida to get the list of classes
+// --------------------------- SDK signature matching ----------------------------- //
 
-func (m *Manager) AnalyseFridaStatic(bundleID string) ([]string, error) {
-	if m.fridaData == nil {
-		return nil, fmt.Errorf("frida not initialized, call FridaSetup first")
-	}
-
-	// Path to frida project must be an absolute path on the local filesystem using path package
-	// projectRoot, err := filepath.Abs("./frida")
-	// if err != nil {
-	// 	m.logger("Error getting absolute path: "+err.Error(), "Manager.AnalyseFridaStatic")
-	// 	return nil, fmt.Errorf("failed to get absolute path: %w", err)
-	// }
-
-	comp := frida.NewCompiler()
-	comp.On("diagnostics", func(diag string) {
-		m.logger("Compiler diagnostics: "+diag, "Manager.AnalyseFridaStatic")
-	})
-
-	bopts := frida.NewCompilerOptions()
-	bopts.SetProjectRoot(m.fridaRoot)
-	bopts.SetSourceMaps(frida.SourceMapsOmitted)
-	bopts.SetJSCompression(frida.JSCompressionTerser)
-
-	compiledScript, err := comp.Build("find_all_classes.ts", bopts)
-	if err != nil {
-		m.logger("Error compiling static script: "+err.Error(), "Manager.AnalyseFridaStatic")
-		return nil, fmt.Errorf("failed to compile script: %w", err)
-	}
-
-	// Create Frida script
-	fridaScript, err := m.fridaData.session.CreateScript(compiledScript)
-	if err != nil {
-		m.logger("Error creating static script: "+err.Error(), "Manager.AnalyseFridaStatic")
-		return nil, fmt.Errorf("failed to create script: %w", err)
-	}
-	defer fridaScript.Clean()
-
-	// Channel to receive class list results
-	classListChan := make(chan []string, 1)
-
-	// Set up message handler
-	fridaScript.On("message", func(msg string) {
-		if classList := m.parseStaticResults(msg); classList != nil {
-			classListChan <- classList
-		}
-	})
-
-	// Load Frida script into the session
-	if err := fridaScript.Load(); err != nil {
-		m.logger("Error loading script: "+err.Error(), "Manager.AnalyseFridaStatic")
-		return nil, fmt.Errorf("failed to load script: %w", err)
-	}
-
-	// Wait for results with timeout
-	select {
-	case classList := <-classListChan:
-		if logPath, saveErr := m.saveClassListLog(bundleID, classList); saveErr != nil {
-			m.logger("Warning: failed to save class log: "+saveErr.Error(), "Manager.AnalyseFridaStatic")
-		} else {
-			m.logger("Class log saved to: "+logPath, "Manager.AnalyseFridaStatic")
-		}
-		m.logger(fmt.Sprintf("Found %d classes", len(classList)), "Manager.AnalyseFridaStatic")
-		return classList, nil
-	case <-time.After(10 * time.Second):
-		m.logger("Timeout waiting for static analysis results", "Manager.AnalyseFridaStatic")
-		return nil, fmt.Errorf("timeout waiting for results")
-	}
-}
-
-// parseStaticResults parses the Frida message and extracts the class list
-func (m *Manager) parseStaticResults(results string) []string {
-	if results == "" {
-		return nil
-	}
-
-	// Parse the results in json to extract the payload. This is Frida logic https://frida.re/docs/messages/
-	var msg map[string]interface{}
-	if err := json.Unmarshal([]byte(results), &msg); err != nil {
-		m.logger("Error parsing analysis results JSON: "+err.Error(), "Manager.parseStaticResults")
-		return nil
-	}
-
-	payload, ok := msg["payload"].([]interface{})
-	if !ok {
-		m.logger("Error: payload is not an array", "Manager.parseStaticResults")
-		return nil
-	}
-
-	// Convert to string slice
-	classList := make([]string, 0, len(payload))
-	for _, item := range payload {
-		if className, ok := item.(string); ok {
-			classList = append(classList, className)
-		}
-	}
-
-	return classList
-}
-
-func (m *Manager) saveClassListLog(bundleID string, classList []string) (string, error) {
-	if len(classList) == 0 {
-		return "", nil
-	}
-
-	classLogDir := m.classLogPath
-	if err := os.MkdirAll(classLogDir, 0o755); err != nil {
-		return "", fmt.Errorf("failed to create class log directory: %w", err)
-	}
-
-	timestamp := time.Now().Format("20060102_150405")
-	fileName := fmt.Sprintf("%s_classlog_%s.txt", bundleID, timestamp)
-	filePath := filepath.Join(classLogDir, fileName)
-	contents := strings.Join(classList, "\n") + "\n"
-
-	if err := os.WriteFile(filePath, []byte(contents), 0o644); err != nil {
-		return "", fmt.Errorf("failed to write class log file: %w", err)
-	}
-
-	return filePath, nil
-}
-
-// LoadSDKSignatures loads the SDK signatures from the JSON file or fetches from GitHub if not present
 func (m *Manager) LoadSDKSignatures() []SDKSignature {
 	// Get SDK signatures from https://github.com/Sicksyg/iOS-SDK-Signatures/blob/main/ios_signatures.json
 
@@ -478,128 +192,6 @@ func (m *Manager) LoadSDKSignatures() []SDKSignature {
 	return sdkSignatures
 }
 
-func (m *Manager) GetBundleInformation() (map[string]any, error) {
-	if m.fridaData == nil {
-		return nil, fmt.Errorf("frida not initialized, call FridaSetup first")
-	}
-
-	comp := frida.NewCompiler()
-	comp.On("diagnostics", func(diag string) {
-		m.logger("Compiler diagnostics: "+diag, "Manager.GetBundleInformation")
-	})
-
-	bopts := frida.NewCompilerOptions()
-	bopts.SetProjectRoot(m.fridaRoot)
-	bopts.SetSourceMaps(frida.SourceMapsOmitted)
-	bopts.SetJSCompression(frida.JSCompressionTerser)
-
-	compiledScript, err := comp.Build("frida_get_bundledata.js", bopts)
-	if err != nil {
-		m.logger("Error compiling script: "+err.Error(), "Manager.GetBundleInformation")
-		return nil, fmt.Errorf("failed to compile script: %w", err)
-	}
-
-	fridaScript, err := m.fridaData.session.CreateScript(compiledScript)
-	if err != nil {
-		m.logger("Error creating bundle information script: "+err.Error(), "Manager.GetBundleInformation")
-		return nil, fmt.Errorf("failed to create script: %w", err)
-	}
-	defer fridaScript.Clean()
-
-	bundleInfoChan := make(chan map[string]any, 1)
-	fridaScript.On("message", func(msg string) {
-		if bundleInfo := m.parseBundleInformation(msg); bundleInfo != nil {
-			bundleInfoChan <- bundleInfo
-		}
-	})
-
-	if err := fridaScript.Load(); err != nil {
-		m.logger("Error loading bundle information script: "+err.Error(), "Manager.GetBundleInformation")
-		return nil, fmt.Errorf("failed to load script: %w", err)
-	}
-
-	select {
-	case bundleInfo := <-bundleInfoChan:
-		m.logger(fmt.Sprintf("Found %d bundle information fields", len(bundleInfo)), "Manager.GetBundleInformation")
-		return bundleInfo, nil
-	case <-time.After(5 * time.Second):
-		m.logger("Timeout waiting for bundle information", "Manager.GetBundleInformation")
-		return make(map[string]any), nil
-	}
-}
-
-func (m *Manager) parseBundleInformation(results string) map[string]any {
-	if results == "" {
-		return nil
-	}
-
-	var msg struct {
-		Type    string         `json:"type"`
-		Payload map[string]any `json:"payload"`
-	}
-	if err := json.Unmarshal([]byte(results), &msg); err != nil {
-		m.logger("Error parsing bundle information JSON: "+err.Error(), "Manager.parseBundleInformation")
-		return nil
-	}
-	if msg.Type != "send" || msg.Payload == nil {
-		return nil
-	}
-
-	return msg.Payload
-}
-
-// RunCompleteAnalysis runs the full Frida analysis workflow: setup, permissions, bundle data, static analysis, and SDK detection.
-func (m *Manager) RunCompleteAnalysis(udid, bundleID string) (map[string]models.IosPermissionDetail, map[string][]string, map[string]any, error) {
-	// Step 1: Setup Frida
-	if err := m.FridaSetup(udid, bundleID); err != nil {
-		return nil, nil, nil, fmt.Errorf("frida setup failed: %w", err)
-	}
-
-	time.Sleep(time.Second * 1) // brief pause to ensure app is fully started
-
-	// Step 2: Run static analysis to get class list (works while suspended)
-	classList, err := m.AnalyseFridaStatic(bundleID)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("static analysis failed: %w", err)
-	}
-
-	// Step 3: Resume immediately so the OS launch watchdog doesn't kill the
-	// still-suspended process; permission hooks also require the app to run.
-	if err := m.ResumeApp(); err != nil {
-		return nil, nil, nil, fmt.Errorf("resume failed: %w", err)
-	}
-
-	// Step 4: Analyze permissions (raw from Frida)
-	rawPermissions, err := m.AnalyseFridaPermissions(bundleID)
-	if err != nil {
-		m.logger("Permissions analysis failed: "+err.Error(), "Manager.RunCompleteAnalysis")
-		// Continue with other analyses even if permissions fail
-		rawPermissions = make(map[string]string)
-	}
-
-	// Step 5: Collect Info.plist metadata while the instrumented app is running.
-	bundleInfo, err := m.GetBundleInformation()
-	if err != nil {
-		m.logger("Bundle information analysis failed: "+err.Error(), "Manager.RunCompleteAnalysis")
-		bundleInfo = make(map[string]any)
-	}
-
-	// Step 6: Detect SDKs from class list (CPU-only, safe to run after resume)
-	sdks := m.AnalyseDetectSDKs(classList)
-
-	// Step 7: Enrich permissions with Apple signature data
-	enrichedPermissions, err := m.AnalyseDetectPermissions(rawPermissions)
-	if err != nil {
-		m.logger("Permission enrichment failed: "+err.Error(), "Manager.RunCompleteAnalysis")
-		// Continue even if permission enrichment fails
-		enrichedPermissions = make(map[string]models.IosPermissionDetail)
-	}
-
-	m.logger("Complete analysis finished successfully", "Manager.RunCompleteAnalysis")
-	return enrichedPermissions, sdks, bundleInfo, nil
-}
-
-// AnalyseDetectSDKs detects SDKs in the given class list using signature matching
 func (m *Manager) AnalyseDetectSDKs(classlist []string) map[string][]string {
 	// fmt.Printf("Number of classes in analysis results: %d\n", len(classList))
 	// fmt.Printf("This is a class list snippet: %v\n", classList[len(classList)-5:])
@@ -712,103 +304,825 @@ func (m *Manager) AnalyseDetectSDKs(classlist []string) map[string][]string {
 	return detectionMap
 }
 
-// Cleanup properly cleans up Frida resources
-func (m *Manager) Cleanup() error {
-	if m.fridaData == nil {
-		return nil
+type trackerScanClass struct {
+	Name   string `json:"name"`
+	Source string `json:"source"`
+}
+
+// TrackerScanDump represents the raw evidence returned by `trackerscan --dump`.
+type TrackerScanDump struct {
+	BundleID         string             `json:"bundleID"`
+	Version          string             `json:"version"`
+	RuntimeError     string             `json:"runtimeError,omitempty"`
+	Classes          []trackerScanClass `json:"classes"`
+	FrameworkNames   []string           `json:"frameworkNames"`
+	PlistTokens      []string           `json:"plistTokens"`
+	TrackingDomains  []string           `json:"trackingDomains"`
+	Permissions      map[string]string  `json:"permissions"`
+	BundleInfo       map[string]any     `json:"bundleInfo"`
+	PrivacyManifests int                `json:"privacyManifests"`
+	PrivacyTracking  bool               `json:"privacyTracking"`
+}
+
+// AnalysisOptions contains the selected app and the local inputs needed to
+// install the latest version or analyze the installed copy.
+type AnalysisOptions struct {
+	UDID                string
+	BundleID            string
+	AnalyzeInstalledApp bool
+	AppleEmail          string
+	ApplePassword       string
+	IPADirectory        string
+	MinimumOSVersion    string
+	TrackerScanPath     string
+	Progress            func(stage, message string, percent int)
+}
+
+// AnalysisResult contains the combined iOS analysis results.
+type AnalysisResult struct {
+	MinimumOSVersion string
+	Version          string
+	TrackerScanPath  string
+	TrackerWarning   error
+	Classes          []string
+	Permissions      map[string]models.IosPermissionDetail
+	SDKs             map[string][]string
+	BundleInfo       map[string]any
+}
+
+// UnsupportedMinimumOSVersionError reports apps whose declared OS requirement
+// is outside the supported install-patching range.
+type UnsupportedMinimumOSVersionError struct {
+	Version string
+}
+
+func (e *UnsupportedMinimumOSVersionError) Error() string {
+	return fmt.Sprintf("unsupported app: minimum iOS version %s is above iOS 18.x", e.Version)
+}
+
+// MinimumOSVersionFromStoreResponse extracts the iTunes lookup value from its
+// JSON response, allowing selection flows to retain the value before download.
+func MinimumOSVersionFromStoreResponse(response string) (string, error) {
+	var result struct {
+		Results []struct {
+			MinimumOSVersion string `json:"minimumOsVersion"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(response), &result); err != nil {
+		return "", fmt.Errorf("decode App Store lookup: %w", err)
+	}
+	if len(result.Results) == 0 {
+		return "", nil
+	}
+	return strings.TrimSpace(result.Results[0].MinimumOSVersion), nil
+}
+
+// StartSSH establishes the persistent SSH connection used for trackerscan.
+// Connection failures are logged and remain non-fatal to the iOS analysis flow.
+func (m *Manager) StartSSH(ctx context.Context) {
+	if m.sshScriptPath == "" {
+		m.logger("iOS SSH script path is not configured", "Manager.StartSSH")
+		close(m.sshReady)
+		return
+	}
+	go m.establishSSH(ctx)
+}
+
+func (m *Manager) establishSSH(ctx context.Context) {
+	defer close(m.sshReady)
+	m.sshControlPath = filepath.Join(os.TempDir(), fmt.Sprintf("am-ios-ssh-%d-%d.sock", os.Getuid(), os.Getpid()))
+	if err := os.Remove(m.sshControlPath); err != nil && !os.IsNotExist(err) {
+		m.logger("Unable to remove stale iOS SSH control socket: "+err.Error(), "Manager.StartSSH")
+		return
 	}
 
-	var errs []error
-
-	// Detach session
-	if m.fridaData.session != nil {
-		if err := m.fridaData.session.Detach(); err != nil {
-			m.logger("Error detaching session: "+err.Error(), "Manager.Cleanup")
-			errs = append(errs, err)
+	keyExists := false
+	if m.sshIdentityPath != "" {
+		if _, err := os.Stat(m.sshIdentityPath); err == nil {
+			keyExists = true
+		} else if !os.IsNotExist(err) {
+			m.logger("Unable to inspect AppMonitor SSH identity: "+err.Error(), "Manager.StartSSH")
+			return
 		}
-		m.fridaData.session.Clean()
 	}
-
-	// Kill only processes spawned by this manager.
-	if m.fridaData.spawned && m.fridaData.device != nil && m.fridaData.pid > 0 {
-		if err := m.fridaData.device.Kill(m.fridaData.pid); err != nil {
-			m.logger("Error killing app: "+err.Error(), "Manager.Cleanup")
-			errs = append(errs, err)
+	if !keyExists {
+		if err := m.openSSHSetupTerminal(ctx); err != nil {
+			m.logger("Unable to start one-time SSH key setup: "+err.Error(), "Manager.StartSSH")
+			return
+		}
+		if err := m.waitForSSHAuthorization(ctx); err != nil {
+			m.logger("AppMonitor SSH key setup did not complete: "+err.Error(), "Manager.StartSSH")
+			return
+		}
+	} else {
+		probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		err := m.probeSSHIdentity(probeCtx)
+		cancel()
+		if err != nil {
+			if !strings.Contains(err.Error(), "Permission denied") &&
+				!strings.Contains(err.Error(), "Host key verification failed") &&
+				!strings.Contains(err.Error(), "Load key") &&
+				!strings.Contains(err.Error(), "agent refused operation") {
+				m.logger("Unable to check AppMonitor SSH key authentication: "+err.Error(), "Manager.StartSSH")
+				return
+			}
+			if err := m.openSSHSetupTerminal(ctx); err != nil {
+				m.logger("Unable to start one-time SSH key setup: "+err.Error(), "Manager.StartSSH")
+				return
+			}
+			if err := m.waitForSSHAuthorization(ctx); err != nil {
+				m.logger("AppMonitor SSH key setup did not complete: "+err.Error(), "Manager.StartSSH")
+				return
+			}
 		}
 	}
 
-	m.fridaData = nil
+	connectCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	if err := m.startPersistentSSH(ctx, connectCtx); err != nil {
+		m.logger("Unable to establish persistent iOS SSH connection: "+err.Error(), "Manager.StartSSH")
+	}
+}
 
-	if len(errs) > 0 {
-		return fmt.Errorf("cleanup encountered %d error(s)", len(errs))
+func (m *Manager) probeSSHIdentity(ctx context.Context) error {
+	cmd := exec.CommandContext(ctx, m.sshScriptPath, "true")
+	cmd.Env = m.sshEnvironment(false, "")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		detail := strings.TrimSpace(string(output))
+		if detail != "" {
+			return fmt.Errorf("%w: %s", err, detail)
+		}
+		return err
 	}
 	return nil
 }
 
-func (m *Manager) OpenAppInAppStore(udid string, appStoreURL string) error {
-	// Function to open the appstore on ios device using frida.
-	// "trackViewUrl": "https://apps.apple.com/dk/app/mobilbank-middelfartsparekasse/id1466762662?uo=4"
-	if strings.TrimSpace(udid) == "" {
-		m.logger("No device UDID supplied; FridaSetup requires an explicit UDID", "Manager.OpenAppInAppStore")
-		return fmt.Errorf("no device UDID supplied")
+func (m *Manager) openSSHSetupTerminal(ctx context.Context) error {
+	if m.sshSetupScriptPath == "" {
+		return fmt.Errorf("SSH setup script path is not configured")
+	}
+	osascript, err := exec.LookPath("/usr/bin/osascript")
+	if err != nil {
+		return fmt.Errorf("AppleScript is unavailable: %w", err)
+	}
+	command := "APPMONITOR_IOS_SSH_IDENTITY_FILE=" + shellQuote(m.sshIdentityPath) +
+		" APPMONITOR_IOS_SSH_SCRIPT=" + shellQuote(m.sshScriptPath) +
+		" APPMONITOR_IPROXY_PATH=" + shellQuote(m.iproxyPath) +
+		" /bin/bash " + shellQuote(m.sshSetupScriptPath)
+	appleScript := "tell application \"Terminal\" to do script \"" +
+		strings.ReplaceAll(strings.ReplaceAll(command, `\`, `\\`), `"`, `\"`) + "\"\ntell application \"Terminal\" to activate"
+	cmd := exec.CommandContext(ctx, osascript, "-e", appleScript)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("open Terminal for one-time SSH setup: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+func (m *Manager) waitForSSHAuthorization(ctx context.Context) error {
+	deadline := time.NewTimer(5 * time.Minute)
+	defer deadline.Stop()
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		err := m.probeSSHIdentity(probeCtx)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return fmt.Errorf("timed out waiting for SSH authorization in Terminal")
+		case <-ticker.C:
+		}
+	}
+}
+
+func (m *Manager) startPersistentSSH(parentCtx, connectCtx context.Context) error {
+	master := exec.CommandContext(parentCtx, m.sshScriptPath)
+	master.Env = m.sshEnvironment(true, "")
+	var masterOutput bytes.Buffer
+	master.Stderr = &masterOutput
+	if err := master.Start(); err != nil {
+		return fmt.Errorf("start SSH control master: %w", err)
 	}
 
-	// Step 1: Setup Frida
-	if err := m.FridaSetup(udid, safariBundleID); err != nil {
-		m.logger("Frida setup failed: "+err.Error(), "Manager.OpenAppInAppStore")
-		return fmt.Errorf("frida setup: %w", err)
-	}
-	defer func() {
-		if err := m.Cleanup(); err != nil {
-			m.logger("Frida cleanup failed: "+err.Error(), "Manager.OpenAppInAppStore")
+	done := make(chan error, 1)
+	m.sshMutex.Lock()
+	m.sshMaster = master
+	m.sshMasterDone = done
+	m.sshMutex.Unlock()
+	go func() {
+		err := master.Wait()
+		m.sshMutex.Lock()
+		if m.sshMaster == master {
+			m.sshMaster = nil
+			m.sshConnected = false
 		}
+		m.sshMutex.Unlock()
+		done <- err
 	}()
 
-	// Frida spawns apps suspended. Resume Safari before loading the script and
-	// calling the RPC so UIApplication can execute the URL open request.
-	if err := m.ResumeApp(); err != nil {
-		m.logger("Safari resume failed: "+err.Error(), "Manager.OpenAppInAppStore")
-		return fmt.Errorf("resume Safari: %w", err)
+	ticker := time.NewTicker(300 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		checkCtx, checkCancel := context.WithTimeout(connectCtx, 2*time.Second)
+		check := exec.CommandContext(checkCtx, m.sshScriptPath)
+		check.Env = m.sshEnvironment(false, "check")
+		output, checkErr := check.CombinedOutput()
+		checkCancel()
+		if checkErr == nil {
+			m.sshMutex.Lock()
+			connected := m.sshMaster == master
+			if connected {
+				m.sshConnected = true
+			}
+			m.sshMutex.Unlock()
+			if connected {
+				m.logger("Persistent iOS SSH connection established", "Manager.StartSSH")
+				return nil
+			}
+			processErr := <-done
+			return fmt.Errorf("SSH control master exited during setup: %v: %s", processErr, strings.TrimSpace(masterOutput.String()))
+		}
+		select {
+		case processErr := <-done:
+			detail := strings.TrimSpace(masterOutput.String())
+			if detail == "" {
+				detail = strings.TrimSpace(string(output))
+			}
+			return fmt.Errorf("SSH control master exited before setup completed: %v: %s", processErr, detail)
+		case <-connectCtx.Done():
+			if err := master.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+				m.logger("Unable to stop failed iOS SSH connection attempt: "+err.Error(), "Manager.StartSSH")
+			}
+			return fmt.Errorf("wait for SSH control master: %w: %s", connectCtx.Err(), strings.TrimSpace(masterOutput.String()))
+		case <-ticker.C:
+		}
+	}
+}
+
+// StopSSH closes the app-owned SSH ControlMaster at shutdown.
+func (m *Manager) StopSSH() {
+	m.sshMutex.Lock()
+	master := m.sshMaster
+	done := m.sshMasterDone
+	m.sshMutex.Unlock()
+	if master == nil {
+		if m.sshControlPath != "" {
+			if err := os.Remove(m.sshControlPath); err != nil && !os.IsNotExist(err) {
+				m.logger("Unable to remove stale iOS SSH control socket: "+err.Error(), "Manager.StopSSH")
+			}
+		}
+		return
 	}
 
-	comp := frida.NewCompiler()
-	comp.On("diagnostics", func(diag string) {
-		m.logger("Compiler diagnostics: "+diag, "Manager.OpenAppInAppStore")
-	})
-
-	bopts := frida.NewCompilerOptions()
-	bopts.SetProjectRoot(m.fridaRoot)
-	bopts.SetSourceMaps(frida.SourceMapsOmitted)
-	bopts.SetJSCompression(frida.JSCompressionTerser)
-
-	compiledScript, err := comp.Build("frida_open_appstore.js", bopts)
-	if err != nil {
-		m.logger("Error compiling script: "+err.Error(), "Manager.OpenAppInAppStore")
-		return fmt.Errorf("compile App Store script: %w", err)
-	}
-
-	// Create and load the script before invoking its RPC exports.
-	fridaScript, err := m.fridaData.session.CreateScript(compiledScript)
-	if err != nil {
-		m.logger("Error creating App Store script: "+err.Error(), "Manager.OpenAppInAppStore")
-		return fmt.Errorf("create App Store script: %w", err)
-	}
-	defer fridaScript.Clean()
-
-	if err := fridaScript.Load(); err != nil {
-		m.logger("Error loading App Store script: "+err.Error(), "Manager.OpenAppInAppStore")
-		return fmt.Errorf("load App Store script: %w", err)
-	}
-
-	rpcContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	activation := fridaScript.ExportsCallWithContext(rpcContext, "openurl", appStoreURL)
-	opened, ok := activation.(bool)
-	if !ok || !opened {
-		m.logger(fmt.Sprintf("App Store RPC failed: %v", activation), "Manager.OpenAppInAppStore")
-		return fmt.Errorf("App Store RPC did not open URL")
+	stop := exec.CommandContext(ctx, m.sshScriptPath)
+	stop.Env = m.sshEnvironment(false, "exit")
+	if output, err := stop.CombinedOutput(); err != nil {
+		m.logger(fmt.Sprintf("Unable to close persistent iOS SSH connection: %v: %s", err, strings.TrimSpace(string(output))), "Manager.StopSSH")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			m.logger("Persistent iOS SSH connection stopped: "+err.Error(), "Manager.StopSSH")
+		}
+	case <-ctx.Done():
+		if err := master.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			m.logger("Unable to terminate persistent iOS SSH process: "+err.Error(), "Manager.StopSSH")
+		}
+	}
+	if err := os.Remove(m.sshControlPath); err != nil && !os.IsNotExist(err) {
+		m.logger("Unable to remove iOS SSH control socket: "+err.Error(), "Manager.StopSSH")
+	}
+}
+
+func (m *Manager) sshEnvironment(master bool, controlAction string) []string {
+	env := append(os.Environ(), "APPMONITOR_IOS_SSH_CONTROL_PATH="+m.sshControlPath)
+	if m.iproxyPath != "" {
+		env = append(env, "APPMONITOR_IPROXY_PATH="+m.iproxyPath)
+	}
+	if m.sshIdentityPath != "" {
+		env = append(env, "APPMONITOR_IOS_SSH_IDENTITY_FILE="+m.sshIdentityPath)
+	}
+	env = append(env, "APPMONITOR_IOS_SSH_BATCH=1")
+	if master {
+		env = append(env, "APPMONITOR_IOS_SSH_MASTER=1")
+	}
+	if controlAction != "" {
+		env = append(env, "APPMONITOR_IOS_SSH_CONTROL_ACTION="+controlAction)
+	}
+	return env
+}
+
+// RunAppAnalysis installs the latest app when requested, runs trackerscan, and
+// optionally follows with the retained Frida analysis.
+func (m *Manager) RunAppAnalysis(ctx context.Context, options AnalysisOptions) (AnalysisResult, error) {
+	if m.helpers == nil {
+		return AnalysisResult{}, fmt.Errorf("iOS helper manager is not configured")
+	}
+	if options.BundleID == "" {
+		return AnalysisResult{}, fmt.Errorf("iOS bundle ID is required")
+	}
+	progress := func(stage, message string, percent int) {
+		if options.Progress != nil {
+			options.Progress(stage, message, percent)
+		}
+	}
+	minimumOSVersion := strings.TrimSpace(options.MinimumOSVersion)
+	if !options.AnalyzeInstalledApp {
+		progress("download", "Downloading app", 10)
+		if err := m.helpers.DownloadApp(options.BundleID, options.AppleEmail, options.ApplePassword, options.IPADirectory); err != nil {
+			return AnalysisResult{}, fmt.Errorf("unable to download %s: %w", options.BundleID, err)
+		}
+
+		ipaPath := filepath.Join(options.IPADirectory, options.BundleID+".ipa")
+		if minimumOSVersion == "" {
+			return AnalysisResult{}, fmt.Errorf("unable to determine the app's MinimumOSVersion from the App Store lookup")
+		}
+
+		needsPatch, unsupported, err := MinimumOSVersionPolicy(minimumOSVersion)
+		if err != nil {
+			return AnalysisResult{}, err
+		}
+		if unsupported {
+			return AnalysisResult{}, &UnsupportedMinimumOSVersionError{Version: minimumOSVersion}
+		}
+
+		progress("install", "Preparing app for installation", 25)
+		installIPAPath := ipaPath
+		var prepared IPAResult
+		if needsPatch {
+			prepared, err = PrepareIPA(ctx, ipaPath, ipaOutputPath(options.IPADirectory, options.BundleID, "-patched"), "16.0", false, m.ipaTools())
+			if err != nil {
+				return AnalysisResult{}, fmt.Errorf("prepare %s for installation: %w", options.BundleID, err)
+			}
+			installIPAPath = prepared.OutputPath
+			if prepared.Changed {
+				m.logger("Prepared compatible IPA at "+prepared.OutputPath, "Manager.RunAppAnalysis")
+			}
+			if prepared.HasIncompatibleExtensions {
+				m.logger("IPA contains extension points outside the compatibility allowlist", "Manager.RunAppAnalysis")
+			}
+		}
+		progress("install", "Installing latest app", 25)
+		if err := m.helpers.InstallApp(options.UDID, installIPAPath); err != nil {
+			if !needsPatch || !prepared.HasIncompatibleExtensions {
+				return AnalysisResult{}, fmt.Errorf("install %s: %w", options.BundleID, err)
+			}
+			m.logger("Initial install failed; retrying once with incompatible extensions pruned: "+err.Error(), "Manager.RunAppAnalysis")
+			progress("install_retry", "Retrying installation without incompatible extensions", 30)
+			pruned, pruneErr := PrepareIPA(ctx, ipaPath, ipaOutputPath(options.IPADirectory, options.BundleID, "-pruned"), "16.0", true, m.ipaTools())
+			if pruneErr != nil {
+				return AnalysisResult{}, fmt.Errorf("install %s failed (%v), and pruning extensions failed: %w", options.BundleID, err, pruneErr)
+			}
+			if !pruned.Changed {
+				return AnalysisResult{}, fmt.Errorf("install %s failed (%v), but no incompatible extensions could be pruned", options.BundleID, err)
+			}
+			m.logger("Prepared pruned IPA at "+pruned.OutputPath, "Manager.RunAppAnalysis")
+			if retryErr := m.helpers.InstallApp(options.UDID, pruned.OutputPath); retryErr != nil {
+				return AnalysisResult{}, fmt.Errorf("install %s after pruning extensions (initial attempt: %v): %w", options.BundleID, err, retryErr)
+			}
+		}
 	}
 
-	m.logger(fmt.Sprintf("App Store RPC result: %v", activation), "Manager.OpenAppInAppStore")
+	if !options.AnalyzeInstalledApp {
+		defer func() {
+			if err := m.Cleanup(); err != nil {
+				m.logger("Frida cleanup warning: "+err.Error(), "Manager.RunAppAnalysis")
+			}
+		}()
+	}
+	result := AnalysisResult{MinimumOSVersion: minimumOSVersion}
+	progress("trackerscan", "Running on-device trackerscan", 35)
+	m.logger("Starting on-device trackerscan for "+options.BundleID, "Manager.RunAppAnalysis")
+	dump, scanErr := m.runTrackerScan(ctx, options.BundleID, options.TrackerScanPath)
+	if scanErr != nil {
+		result.TrackerWarning = scanErr
+		m.logger("Trackerscan warning: "+scanErr.Error(), "Manager.RunAppAnalysis")
+		progress("trackerscan_warning", "Trackerscan warning: "+scanErr.Error(), 40)
+	} else {
+		result.TrackerScanPath = options.TrackerScanPath
+		m.logger("Trackerscan returned JSON for "+options.BundleID+"; saved to "+options.TrackerScanPath, "Manager.RunAppAnalysis")
+		if dump.RuntimeError != "" {
+			result.TrackerWarning = fmt.Errorf("runtime scan was incomplete: %s", dump.RuntimeError)
+			m.logger("Trackerscan warning: "+result.TrackerWarning.Error(), "Manager.RunAppAnalysis")
+			progress("trackerscan_warning", "Trackerscan warning: "+result.TrackerWarning.Error(), 40)
+		}
+	}
+
+	if scanErr == nil {
+		result.Version = dump.Version
+		result.Classes = make([]string, 0, len(dump.Classes))
+		for _, class := range dump.Classes {
+			if class.Name != "" {
+				result.Classes = append(result.Classes, class.Name)
+			}
+		}
+		result.SDKs = mergeSDKMaps(result.SDKs, m.detectTrackerSDKs(dump))
+		result.Permissions = mergePermissions(result.Permissions, m.enrichTrackerPermissions(dump.Permissions))
+		result.BundleInfo = mergeBundleInfo(result.BundleInfo, dump.BundleInfo)
+	}
+	if options.AnalyzeInstalledApp {
+		progress("analysis_complete", "On-device analysis complete", 75)
+		return result, nil
+	}
+	progress("frida", "Running Frida analysis", 45)
+	fridaPermissions, fridaSDKs, fridaBundleInfo, err := m.RunCompleteAnalysis(options.UDID, options.BundleID)
+	if err != nil {
+		return result, fmt.Errorf("Frida analysis failed: %w", err)
+	}
+	result.Permissions = mergePermissions(result.Permissions, fridaPermissions)
+	result.SDKs = mergeSDKMaps(result.SDKs, fridaSDKs)
+	result.BundleInfo = mergeBundleInfo(result.BundleInfo, fridaBundleInfo)
+	return result, nil
+}
+
+func (m *Manager) runTrackerScan(ctx context.Context, bundleID, outputPath string) (TrackerScanDump, error) {
+	if !validBundleID(bundleID) {
+		return TrackerScanDump{}, fmt.Errorf("invalid iOS bundle ID %q", bundleID)
+	}
+	if err := m.waitForSSH(ctx); err != nil {
+		return TrackerScanDump{}, err
+	}
+
+	command := m.trackerCommand
+	if command == "" {
+		command = "am_scanner"
+	}
+	remoteCommand := trackerScanRemoteCommand(command, bundleID)
+	scanCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(scanCtx, m.sshScriptPath, remoteCommand)
+	cmd.Env = m.sshEnvironment(false, "")
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	stdout, err := cmd.Output()
+	if err != nil {
+		detail := strings.TrimSpace(stderr.String())
+		if detail != "" {
+			return TrackerScanDump{}, fmt.Errorf("run trackerscan over SSH: %w: %s", err, detail)
+		}
+		return TrackerScanDump{}, fmt.Errorf("run trackerscan over SSH: %w", err)
+	}
+	if outputPath != "" {
+		if err := os.WriteFile(outputPath, stdout, 0644); err != nil {
+			return TrackerScanDump{}, fmt.Errorf("save trackerscan JSON: %w", err)
+		}
+	}
+	dump, err := DecodeTrackerScanDump(stdout)
+	if err != nil {
+		return TrackerScanDump{}, err
+	}
+	if dump.BundleID != bundleID {
+		return TrackerScanDump{}, fmt.Errorf("trackerscan returned bundle ID %q, expected %q", dump.BundleID, bundleID)
+	}
+	return dump, nil
+}
+
+// OpenURL opens a URL on the connected iOS device using the SSH helper.
+func (m *Manager) OpenURL(ctx context.Context, targetURL string) error {
+	if strings.TrimSpace(targetURL) == "" {
+		return fmt.Errorf("URL is required")
+	}
+	if m.sshScriptPath == "" {
+		return fmt.Errorf("iOS SSH script path is not configured")
+	}
+	if err := m.waitForSSH(ctx); err != nil {
+		return err
+	}
+	remoteCommand := `export PATH="/var/jb/usr/local/bin:/var/jb/usr/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"; exec uiopen ` +
+		shellQuote(targetURL)
+	cmd := exec.CommandContext(ctx, m.sshScriptPath, remoteCommand)
+	cmd.Env = m.sshEnvironment(false, "")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		detail := strings.TrimSpace(string(output))
+		if detail != "" {
+			return fmt.Errorf("open URL on iOS device over SSH: %w: %s", err, detail)
+		}
+		return fmt.Errorf("open URL on iOS device over SSH: %w", err)
+	}
 	return nil
+}
+
+func (m *Manager) waitForSSH(ctx context.Context) error {
+	if m.sshReady != nil {
+		select {
+		case <-m.sshReady:
+		case <-ctx.Done():
+			return fmt.Errorf("wait for persistent iOS SSH connection: %w", ctx.Err())
+		}
+	}
+	m.sshMutex.Lock()
+	connected := m.sshConnected
+	m.sshMutex.Unlock()
+	if !connected {
+		return fmt.Errorf("persistent iOS SSH connection is unavailable")
+	}
+	return nil
+}
+
+// ListInstalledApps retrieves metadata and icon data from trackerscan over the
+// persistent iOS SSH connection, then caches decoded icons for reports.
+func (m *Manager) ListInstalledApps(ctx context.Context) ([]helpers.InstalledApp, error) {
+	if m.sshScriptPath == "" {
+		return nil, fmt.Errorf("iOS SSH script path is not configured")
+	}
+	if err := m.waitForSSH(ctx); err != nil {
+		return nil, err
+	}
+	command := m.trackerCommand
+	if command == "" {
+		command = "am_scanner"
+	}
+	remoteCommand := trackerScanListRemoteCommand(command)
+	scanCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(scanCtx, m.sshScriptPath, remoteCommand)
+	cmd.Env = m.sshEnvironment(false, "")
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	stdout, err := cmd.Output()
+	if err != nil {
+		detail := strings.TrimSpace(stderr.String())
+		if detail != "" {
+			return nil, fmt.Errorf("list installed apps with trackerscan over SSH: %w: %s", err, detail)
+		}
+		return nil, fmt.Errorf("list installed apps with trackerscan over SSH: %w", err)
+	}
+	apps, err := DecodeTrackerScanAppList(stdout)
+	if err != nil {
+		return nil, err
+	}
+	for index := range apps {
+		if apps[index].IconDataURI == "" {
+			continue
+		}
+		iconBytes, mimeType, err := parseIconDataURI(apps[index].IconDataURI)
+		if err != nil {
+			return nil, fmt.Errorf("decode icon for %s: %w", apps[index].CFBundleIdentifier, err)
+		}
+		if m.appIconCachePath == "" {
+			return nil, fmt.Errorf("iOS app icon cache path is not configured")
+		}
+		if err := os.MkdirAll(m.appIconCachePath, 0755); err != nil {
+			return nil, fmt.Errorf("create iOS app icon cache: %w", err)
+		}
+		extension := map[string]string{
+			"image/png":  ".png",
+			"image/jpeg": ".jpg",
+			"image/gif":  ".gif",
+			"image/webp": ".webp",
+		}[mimeType]
+		cacheKey := sha256.Sum256([]byte(apps[index].CFBundleIdentifier + "\x00" + apps[index].Version))
+		iconPath := filepath.Join(m.appIconCachePath, fmt.Sprintf("%x%s", cacheKey, extension))
+		if err := os.WriteFile(iconPath, iconBytes, 0644); err != nil {
+			return nil, fmt.Errorf("cache icon for %s: %w", apps[index].CFBundleIdentifier, err)
+		}
+		apps[index].IconPath = iconPath
+	}
+	return apps, nil
+}
+
+func trackerScanRemoteCommand(command, bundleID string) string {
+	return `export PATH="/var/jb/usr/local/bin:/var/jb/usr/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"; exec ` +
+		shellQuote(command) + " --dump " + shellQuote(bundleID)
+}
+
+func trackerScanListRemoteCommand(command string) string {
+	return `export PATH="/var/jb/usr/local/bin:/var/jb/usr/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"; exec ` +
+		shellQuote(command) + " --list --json"
+}
+
+// DecodeTrackerScanAppList validates trackerscan's --list --json output and
+// converts icon bytes into data URLs suitable for the Wails frontend.
+func DecodeTrackerScanAppList(data []byte) ([]helpers.InstalledApp, error) {
+	var response struct {
+		Apps []struct {
+			BundleID   string `json:"bundleID"`
+			Name       string `json:"name"`
+			Version    string `json:"version"`
+			IconData   string `json:"iconData"`
+			IconFormat string `json:"iconFormat"`
+		} `json:"apps"`
+	}
+	if err := json.Unmarshal(data, &response); err != nil {
+		return nil, fmt.Errorf("decode trackerscan app list JSON: %w", err)
+	}
+	if response.Apps == nil {
+		return nil, fmt.Errorf("trackerscan app list JSON is missing apps")
+	}
+	apps := make([]helpers.InstalledApp, 0, len(response.Apps))
+	for index, app := range response.Apps {
+		if !validBundleID(app.BundleID) || strings.TrimSpace(app.Name) == "" {
+			return nil, fmt.Errorf("trackerscan app list entry %d has invalid bundleID or name", index)
+		}
+		installed := helpers.InstalledApp{
+			CFBundleIdentifier:  app.BundleID,
+			CFBundleDisplayName: app.Name,
+			Version:             app.Version,
+		}
+		if app.IconData != "" {
+			iconData, err := base64.StdEncoding.DecodeString(app.IconData)
+			if err != nil {
+				return nil, fmt.Errorf("decode base64 icon for %s: %w", app.BundleID, err)
+			}
+			mimeType, _, err := validateTrackerIcon(iconData, app.IconFormat)
+			if err != nil {
+				return nil, fmt.Errorf("validate icon for %s: %w", app.BundleID, err)
+			}
+			installed.IconDataURI = "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(iconData)
+		}
+		apps = append(apps, installed)
+	}
+	return apps, nil
+}
+
+func validateTrackerIcon(data []byte, format string) (mimeType, extension string, err error) {
+	switch strings.ToLower(format) {
+	case "png":
+		if len(data) < 8 || !bytes.Equal(data[:8], []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}) {
+			return "", "", fmt.Errorf("iconFormat is png but image signature is invalid")
+		}
+		return "image/png", "png", nil
+	case "jpeg", "jpg":
+		if len(data) < 3 || !bytes.Equal(data[:3], []byte{0xff, 0xd8, 0xff}) {
+			return "", "", fmt.Errorf("iconFormat is jpeg but image signature is invalid")
+		}
+		return "image/jpeg", "jpg", nil
+	case "gif":
+		if len(data) < 6 || (!bytes.Equal(data[:6], []byte("GIF87a")) && !bytes.Equal(data[:6], []byte("GIF89a"))) {
+			return "", "", fmt.Errorf("iconFormat is gif but image signature is invalid")
+		}
+		return "image/gif", "gif", nil
+	case "webp":
+		if len(data) < 12 || !bytes.Equal(data[:4], []byte("RIFF")) || !bytes.Equal(data[8:12], []byte("WEBP")) {
+			return "", "", fmt.Errorf("iconFormat is webp but image signature is invalid")
+		}
+		return "image/webp", "webp", nil
+	default:
+		return "", "", fmt.Errorf("unsupported icon format %q", format)
+	}
+}
+
+func parseIconDataURI(uri string) ([]byte, string, error) {
+	const prefix = "data:"
+	if !strings.HasPrefix(uri, prefix) {
+		return nil, "", fmt.Errorf("icon data URL is malformed")
+	}
+	metadata, encoded, ok := strings.Cut(strings.TrimPrefix(uri, prefix), ",")
+	if !ok || !strings.HasSuffix(metadata, ";base64") {
+		return nil, "", fmt.Errorf("icon data URL is not base64 encoded")
+	}
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, "", fmt.Errorf("decode icon data URL: %w", err)
+	}
+	return data, strings.TrimSuffix(metadata, ";base64"), nil
+}
+
+func (m *Manager) detectTrackerSDKs(dump TrackerScanDump) map[string][]string {
+	evidence := make(map[string]struct{}, len(dump.Classes)+len(dump.FrameworkNames))
+	for _, class := range dump.Classes {
+		if class.Name != "" {
+			evidence[class.Name] = struct{}{}
+		}
+	}
+	for _, framework := range dump.FrameworkNames {
+		if framework != "" {
+			evidence[framework] = struct{}{}
+		}
+	}
+	names := make([]string, 0, len(evidence))
+	for name := range evidence {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return m.AnalyseDetectSDKs(names)
+}
+
+func (m *Manager) enrichTrackerPermissions(raw map[string]string) map[string]models.IosPermissionDetail {
+	if len(raw) == 0 {
+		return nil
+	}
+	permissions, err := m.AnalyseDetectPermissions(raw)
+	if err != nil {
+		m.logger("Unable to enrich trackerscan permissions: "+err.Error(), "Manager.RunAppAnalysis")
+		return nil
+	}
+	return permissions
+}
+
+func mergeSDKMaps(primary, additional map[string][]string) map[string][]string {
+	merged := make(map[string][]string, len(primary)+len(additional))
+	for sdk, classes := range primary {
+		merged[sdk] = append([]string(nil), classes...)
+	}
+	for sdk, classes := range additional {
+		seen := make(map[string]struct{}, len(merged[sdk]))
+		for _, class := range merged[sdk] {
+			seen[class] = struct{}{}
+		}
+		for _, class := range classes {
+			if _, exists := seen[class]; exists {
+				continue
+			}
+			merged[sdk] = append(merged[sdk], class)
+			seen[class] = struct{}{}
+		}
+		sort.Strings(merged[sdk])
+	}
+	return merged
+}
+
+func mergePermissions(primary, additional map[string]models.IosPermissionDetail) map[string]models.IosPermissionDetail {
+	merged := make(map[string]models.IosPermissionDetail, len(primary)+len(additional))
+	for key, value := range primary {
+		merged[key] = value
+	}
+	for key, value := range additional {
+		if _, exists := merged[key]; !exists {
+			merged[key] = value
+		}
+	}
+	return merged
+}
+
+func mergeBundleInfo(primary, additional map[string]any) map[string]any {
+	merged := make(map[string]any, len(primary)+len(additional))
+	for key, value := range primary {
+		merged[key] = value
+	}
+	for key, value := range additional {
+		if _, exists := merged[key]; !exists {
+			merged[key] = value
+		}
+	}
+	return merged
+}
+
+func validBundleID(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, char := range value {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') || char == '.' || char == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
+// MinimumOSVersionPolicy classifies an app's declared minimum iOS version.
+func MinimumOSVersionPolicy(version string) (needsPatch, unsupported bool, err error) {
+	parts := strings.Split(version, ".")
+	if len(parts) == 0 || len(parts) > 3 {
+		return false, false, fmt.Errorf("invalid MinimumOSVersion %q", version)
+	}
+	values := make([]int, 3)
+	for index, part := range parts {
+		if part == "" {
+			return false, false, fmt.Errorf("invalid MinimumOSVersion %q", version)
+		}
+		values[index], err = strconv.Atoi(part)
+		if err != nil || values[index] < 0 {
+			return false, false, fmt.Errorf("invalid MinimumOSVersion %q", version)
+		}
+	}
+	unsupported = values[0] > 18
+	needsPatch = !unsupported && values[0] >= 16
+	return needsPatch, unsupported, nil
+}
+
+// DecodeTrackerScanDump decodes and validates a trackerscan JSON dump.
+func DecodeTrackerScanDump(data []byte) (TrackerScanDump, error) {
+	var dump TrackerScanDump
+	if err := json.Unmarshal(data, &dump); err != nil {
+		return TrackerScanDump{}, fmt.Errorf("decode trackerscan JSON: %w", err)
+	}
+	if dump.BundleID == "" {
+		return TrackerScanDump{}, fmt.Errorf("trackerscan JSON is missing bundleID")
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return TrackerScanDump{}, fmt.Errorf("decode trackerscan JSON fields: %w", err)
+	}
+	for _, field := range []string{"classes", "frameworkNames", "plistTokens"} {
+		if _, exists := fields[field]; !exists {
+			return TrackerScanDump{}, fmt.Errorf("trackerscan JSON is missing %s", field)
+		}
+	}
+	return dump, nil
 }

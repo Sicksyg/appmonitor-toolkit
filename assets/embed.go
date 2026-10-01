@@ -20,7 +20,7 @@ var DataFS embed.FS
 // BinFS contains the embedded macOS binaries.
 // It is kept separate so callers can list the files inside the directory.
 //
-//go:embed bin/darwin-arm64/*
+//go:embed bin/darwin-*/*
 var BinFS embed.FS
 
 //go:embed lib/*

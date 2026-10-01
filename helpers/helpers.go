@@ -17,6 +17,9 @@ import (
 type InstalledApp struct {
 	CFBundleIdentifier  string
 	CFBundleDisplayName string
+	Version             string
+	IconPath            string `json:"-"`
+	IconDataURI         string `json:"-"`
 }
 
 // DeviceInfo holds device information
@@ -33,6 +36,8 @@ type ToolPaths struct {
 	IDeviceID        string
 	IDeviceInfo      string
 	IDeviceInstaller string
+	LDID             string
+	IProxy           string
 }
 
 type Paths struct {
@@ -42,11 +47,17 @@ type Paths struct {
 
 // NewToolPaths builds tool paths from the extracted bin directory.
 func NewToolPaths(binDir string) ToolPaths {
+	ldidPath := strings.TrimSpace(os.Getenv("APPMONITOR_LDID_PATH"))
+	if ldidPath == "" {
+		ldidPath = filepath.Join(binDir, "ldid")
+	}
 	return ToolPaths{
 		IPATool:          filepath.Join(binDir, "ipatool"),
 		IDeviceID:        filepath.Join(binDir, "idevice_id"),
 		IDeviceInfo:      filepath.Join(binDir, "ideviceinfo"),
 		IDeviceInstaller: filepath.Join(binDir, "ideviceinstaller"),
+		LDID:             ldidPath,
+		IProxy:           filepath.Join(binDir, "iproxy"),
 	}
 }
 
@@ -253,22 +264,42 @@ func (m *Manager) InstallApp(udid, pathToIpaFile string) error {
 	runtime.EventsEmit(m.ctx, "installationOutput", string(outputBytes))
 
 	m.logger("Installation output: "+string(outputBytes), "helpers.Manager.InstallApp")
-	if err != nil {
-		m.logger("Installation failed: "+err.Error(), "helpers.Manager.InstallApp")
-		return fmt.Errorf("install IPA: %w", err)
+	if err != nil || hasInstallerError(string(outputBytes)) {
+		if err != nil {
+			m.logger("Installation failed: "+err.Error(), "helpers.Manager.InstallApp")
+			return fmt.Errorf("install IPA: %w: %s", err, strings.TrimSpace(string(outputBytes)))
+		}
+		m.logger("Installation failed despite successful process exit", "helpers.Manager.InstallApp")
+		return fmt.Errorf("install IPA failed: %s", strings.TrimSpace(string(outputBytes)))
 	}
 	return nil
+}
+
+func hasInstallerError(output string) bool {
+	for _, line := range strings.Split(output, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "ERROR:") {
+			return true
+		}
+	}
+	return false
+}
+
+// IsAppInstalled reports whether the requested bundle is installed on the device.
+func (m *Manager) IsAppInstalled(udid, bundleID string) bool {
+	for _, app := range m.GetInstalledApps(udid) {
+		if app.CFBundleIdentifier == bundleID {
+			return true
+		}
+	}
+	return false
 }
 
 // Calls DownloadApp and InstallApp in sequence, checking if the app is already installed
 func (m *Manager) DownloadAndInstall(udid, bundleID string, email, password string, pathToTmpDir string) error {
 	// Check if app is already installed
-	installedApps := m.GetInstalledApps(udid)
-	for _, app := range installedApps {
-		if app.CFBundleIdentifier == bundleID {
-			m.logger("App "+bundleID+" is already installed on device "+udid, "helpers.Manager.DownloadAndInstall")
-			return nil
-		}
+	if m.IsAppInstalled(udid, bundleID) {
+		m.logger("App "+bundleID+" is already installed on device "+udid, "helpers.Manager.DownloadAndInstall")
+		return nil
 	}
 	// Download and install the app
 	if err := m.DownloadApp(bundleID, email, password, pathToTmpDir); err != nil {

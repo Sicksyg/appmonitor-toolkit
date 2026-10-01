@@ -9,7 +9,7 @@ import (
 	"AppMonitor/assets"
 )
 
-const bundledToolsVersion = "v1" // bump this whenever bundled binaries change
+const bundledToolsVersion = "v2" // bump this whenever bundled binaries change
 
 // EnsureBundledTools extracts embedded helper binaries for the current macOS arch into ~/Library/Application Support/AppMonitor/bin and returns that bin dir.
 func EnsureBundledTools(appName string) (string, error) {
@@ -36,17 +36,29 @@ func EnsureBundledTools(appName string) (string, error) {
 		return "", fmt.Errorf("create bin dir: %w", err)
 	}
 
-	// Skip extraction if current version already installed.
-	versionFilePath := filepath.Join(toolsDir, ".tools-version")
-	if b, err := os.ReadFile(versionFilePath); err == nil && string(b) == bundledToolsVersion {
-		// The installed tools match this version, so reuse them.
-		return toolsDir, nil
-	}
-
 	// List all bundled binaries for the current architecture.
 	binaryEntries, err := assets.ListBundledBinaries(arch)
 	if err != nil {
 		return "", fmt.Errorf("list embedded binaries for arch %s: %w", arch, err)
+	}
+
+	// Skip extraction only when the installed set is complete. This also
+	// notices a newly bundled tool such as ldid without a manual cache clear.
+	versionFilePath := filepath.Join(toolsDir, ".tools-version")
+	if b, err := os.ReadFile(versionFilePath); err == nil && string(b) == bundledToolsVersion {
+		complete := true
+		for _, entry := range binaryEntries {
+			if entry.IsDir() {
+				continue
+			}
+			if _, err := os.Stat(filepath.Join(toolsDir, entry.Name())); err != nil {
+				complete = false
+				break
+			}
+		}
+		if complete {
+			return toolsDir, nil
+		}
 	}
 
 	// Extract each embedded binary into the bin directory.

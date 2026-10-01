@@ -79,9 +79,13 @@
                             <td>
                                 <img v-if="item.artworkUrl512" :src="item.artworkUrl512" :alt="`${item.trackName} logo`"
                                     class="result-logo" />
+                                <span v-else class="result-logo-placeholder" aria-hidden="true"></span>
                             </td>
                             <td>{{ item.trackName }}</td>
-                            <td class="row-muted">{{ item.bundleId }} - {{ item.sellerName }}</td>
+                            <td class="row-muted">
+                                <div>{{ item.bundleId }}</div>
+                                <div>{{ item.isInstalled ? `Installed · ${item.version || 'version unknown'}` : item.sellerName }}</div>
+                            </td>
                         </tr>
                     </tbody>
                 </table>
@@ -208,14 +212,44 @@ async function copyUdid() {
 function parseResults(raw) {
     try {
         const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
+        if (parsed?.error) {
+            throw new Error(parsed.error)
+        }
+        const installedApps = Array.isArray(parsed?.apps) ? parsed.apps : null
+        if (installedApps) {
+            return normalizeInstalledApps(installedApps)
+        }
         if (Array.isArray(parsed)) {
-            return parsed.flatMap((entry) => (Array.isArray(entry?.results) ? entry.results : []))
+            return parsed.flatMap((entry) => {
+                if (Array.isArray(entry?.results)) {
+                    return entry.results
+                }
+                if (entry?.bundleID || entry?.bundleId) {
+                    return normalizeInstalledApps([entry])
+                }
+                return []
+            })
         }
         return Array.isArray(parsed?.results) ? parsed.results : []
     } catch (error) {
         console.error('Failed to parse search results:', error)
         return []
     }
+}
+
+function normalizeInstalledApps(apps) {
+    return apps.map((app) => ({
+        trackId: 0,
+        trackName: app.name ?? app.trackName ?? '',
+        bundleId: app.bundleID ?? app.bundleId ?? '',
+        version: app.version ?? '',
+        artworkUrl512: app.iconDataURI
+            ?? (app.iconData && app.iconFormat
+                ? `data:image/${app.iconFormat === 'jpg' ? 'jpeg' : app.iconFormat};base64,${app.iconData}`
+                : app.artworkUrl512 ?? ''),
+        sellerName: app.sellerName ?? 'Installed on device',
+        isInstalled: true,
+    }))
 }
 
 // --- Handlers ---
@@ -245,7 +279,13 @@ async function handleLoadFromPhone() {
     try {
         const raw = await LoadFromPhone()
         results.value = parseResults(raw)
-        resultsMessage.value = results.value.length ? '' : 'No results found.'
+        let errorMessage = ''
+        try {
+            errorMessage = JSON.parse(raw)?.error ?? ''
+        } catch (_error) {
+            // parseResults reports malformed responses in the console.
+        }
+        resultsMessage.value = errorMessage || (results.value.length ? '' : 'No results found.')
     } catch (error) {
         console.error(error)
         resultsMessage.value = 'Load from phone failed.'
@@ -386,6 +426,14 @@ async function openAppstoreUrl() {
     height: 36px;
     border-radius: 8px;
     object-fit: cover;
+}
+
+.result-logo-placeholder {
+    display: inline-block;
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    background: rgba(158, 172, 200, 0.18);
 }
 
 .row-muted {

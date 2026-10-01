@@ -30,14 +30,15 @@ type StoreSearchResponse struct {
 
 // StoreResult represents the details of an individual app result from the appstores
 type StoreResult struct {
-	TrackID       int64  `json:"trackId"`
-	TrackName     string `json:"trackName"`
-	BundleID      string `json:"bundleId"`
-	SellerName    string `json:"sellerName"`
-	ArtistViewURL string `json:"artistViewUrl"`
-	ArtworkURL    string `json:"artworkUrl512"`
-	Description   string `json:"description"`
-	TrackViewUrl  string `json:"trackViewUrl"`
+	TrackID          int64  `json:"trackId"`
+	TrackName        string `json:"trackName"`
+	BundleID         string `json:"bundleId"`
+	SellerName       string `json:"sellerName"`
+	ArtistViewURL    string `json:"artistViewUrl"`
+	ArtworkURL       string `json:"artworkUrl512"`
+	Description      string `json:"description"`
+	TrackViewUrl     string `json:"trackViewUrl"`
+	MinimumOSVersion string `json:"minimumOsVersion"`
 }
 
 func (a *Manager) fetchItunesResults(url string) string {

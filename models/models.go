@@ -56,6 +56,8 @@ type AppInfo struct {
 	InstalledApps      []helpers.InstalledApp             `json:"installedApps,omitempty"`
 	ResultsPath        string                             `json:"resultsPath,omitempty"`
 	Version            string                             `json:"version,omitempty"`
+	MinimumOSVersion   string                             `json:"minimumOSVersion,omitempty"`
+	TrackerScanPath    string                             `json:"trackerScanPath,omitempty"`
 	AnalysisDate       string                             `json:"analysisDate"`
 	SDKs               map[string][]string                `json:"sdks,omitempty"`
 	IosPermissions     map[string]IosPermissionDetail     `json:"iosPermissions,omitempty"`
@@ -82,6 +84,8 @@ type AppHistory struct {
 type AnalysisRecord struct {
 	AnalysisDate       string                             `json:"analysisDate"`
 	ResultsPath        string                             `json:"resultsPath,omitempty"`
+	MinimumOSVersion   string                             `json:"minimumOSVersion,omitempty"`
+	TrackerScanPath    string                             `json:"trackerScanPath,omitempty"`
 	SDKs               map[string][]string                `json:"sdks,omitempty"`
 	IosPermissions     map[string]IosPermissionDetail     `json:"iosPermissions,omitempty"`
 	BundleInfo         map[string]any                     `json:"bundleInfo,omitempty"`
@@ -148,6 +152,8 @@ func (database AnalysisDatabase) AddAnalysis(record AppInfo) {
 	appHistory.Versions[version] = AnalysisRecord{
 		AnalysisDate:       record.AnalysisDate,
 		ResultsPath:        record.ResultsPath,
+		MinimumOSVersion:   record.MinimumOSVersion,
+		TrackerScanPath:    record.TrackerScanPath,
 		SDKs:               record.SDKs,
 		IosPermissions:     record.IosPermissions,
 		BundleInfo:         record.BundleInfo,

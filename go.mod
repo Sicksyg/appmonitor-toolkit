@@ -7,6 +7,7 @@ require (
 	github.com/frida/frida-go v1.1.0
 	github.com/johnfercher/maroto/v2 v2.4.0
 	github.com/wailsapp/wails/v2 v2.13.0
+	howett.net/plist v1.0.2-0.20250314012144-ee69052608d9
 )
 
 require (

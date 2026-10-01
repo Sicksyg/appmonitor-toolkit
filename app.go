@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -38,24 +39,28 @@ func NewApp() *App {
 
 // App struct
 type App struct {
-	ctx               context.Context
-	appinfo           AppInfo
-	analysisDone      chan struct{}
-	reportMgr         *report.Manager
-	appstoresMgr      *appstores.Manager
-	helpersMgr        *helpers.Manager
-	iosMgr            *ios.Manager
-	androidMgr        *android.Manager
-	settings          models.Settings
-	settingsPath      string
-	tmpPath           string
-	tmpIpaPath        string
-	logpath           string
-	outputPath        string
-	reportPath        string
-	iosReportPath     string
-	androidReportPath string
-	iosClassLogPath   string
+	ctx                context.Context
+	appinfo            AppInfo
+	analysisDone       chan struct{}
+	reportMgr          *report.Manager
+	appstoresMgr       *appstores.Manager
+	helpersMgr         *helpers.Manager
+	iosMgr             *ios.Manager
+	androidMgr         *android.Manager
+	settings           models.Settings
+	settingsPath       string
+	tmpPath            string
+	tmpIpaPath         string
+	logpath            string
+	outputPath         string
+	reportPath         string
+	iosReportPath      string
+	androidReportPath  string
+	iosClassLogPath    string
+	iosSSHScript       string
+	iosSSHSetupScript  string
+	trackerscanCommand string
+	phoneApps          []helpers.InstalledApp
 }
 
 // AppInfo struct alias from models for app information and installation details
@@ -78,6 +83,9 @@ func (a *App) startup(ctx context.Context) {
 		return
 	}
 	a.SetupLogging()
+	if err := a.prepareIOSIntegrationScripts(); err != nil {
+		a.Log("Error preparing iOS integration scripts: "+err.Error(), "App.startup")
+	}
 
 	// Load external tools (ipatool, idevice_id, ideviceinfo, ideviceinstaller) and their bundled dylibs
 	toolPaths, libDir, err := a.LoadExternalTools()
@@ -85,7 +93,7 @@ func (a *App) startup(ctx context.Context) {
 		a.Log("Error loading external tools: "+err.Error(), "App.startup")
 		return //Fail gracefully if tools cannot be loaded
 	}
-	a.Log(fmt.Sprintf("Resolved tool paths - ipatool=%s idevice_id=%s ideviceinfo=%s ideviceinstaller=%s", toolPaths.IPATool, toolPaths.IDeviceID, toolPaths.IDeviceInfo, toolPaths.IDeviceInstaller), "App.startup")
+	a.Log(fmt.Sprintf("Resolved tool paths - ipatool=%s idevice_id=%s ideviceinfo=%s ideviceinstaller=%s ldid=%s iproxy=%s", toolPaths.IPATool, toolPaths.IDeviceID, toolPaths.IDeviceInfo, toolPaths.IDeviceInstaller, toolPaths.LDID, toolPaths.IProxy), "App.startup")
 
 	// Ensure the Frida project is set up by calling EnsureFridaProject, which will create the project if it doesn't exist
 	projectRoot, err := tools.EnsureFridaProject("AppMonitor")
@@ -101,9 +109,20 @@ func (a *App) startup(ctx context.Context) {
 
 	// Initialize iOS manager with the appropriate paths
 	a.iosMgr = ios.NewManager(a.Log, ios.Paths{
-		FridaRoot:    projectRoot,
-		ClassLogPath: a.iosClassLogPath,
+		FridaRoot:          projectRoot,
+		ClassLogPath:       a.iosClassLogPath,
+		Helpers:            a.helpersMgr,
+		SSHScriptPath:      a.iosSSHScript,
+		SSHSetupScriptPath: a.iosSSHSetupScript,
+		LDIDPath:           toolPaths.LDID,
+		DittoPath:          os.Getenv(dittoPathEnv),
+		LibPath:            libDir,
+		IProxyPath:         toolPaths.IProxy,
+		SSHIdentityPath:    filepath.Join(filepath.Dir(a.settingsPath), "ssh", "id_ed25519"),
+		TrackerScanCommand: a.trackerscanCommand,
+		AppIconCachePath:   filepath.Join(a.tmpPath, "ios-app-icons"),
 	})
+	a.iosMgr.StartSSH(ctx)
 	// Initialize Android manager with the appropriate paths
 	a.androidMgr = android.NewManager(a.Log, android.Paths{
 		OutputPath: a.outputPath,
@@ -131,6 +150,9 @@ func (a *App) startup(ctx context.Context) {
 }
 
 func (a *App) OnShutdown(ctx context.Context) {
+	if a.iosMgr != nil {
+		a.iosMgr.StopSSH()
+	}
 	a.Log("==================================================", "App.OnShutdown")
 	a.Log("APPLICATION SHUTDOWN", "App.OnShutdown")
 	a.Log("==================================================", "App.OnShutdown")
@@ -367,51 +389,179 @@ func (a *App) setupOutputPaths() error {
 	return nil
 }
 
-// ------------------------- Frida analysis functions ----------------------- //
+//go:embed scripts/ios-ssh.sh scripts/ios-ssh-setup.sh
+var iosIntegrationScripts embed.FS
+
+const (
+	iosSSHScriptEnv       = "APPMONITOR_IOS_SSH_SCRIPT"
+	trackerScanCommandEnv = "APPMONITOR_TRACKERSCAN_COMMAND"
+	dittoPathEnv          = "APPMONITOR_DITTO_PATH"
+)
+
+func (a *App) prepareIOSIntegrationScripts() error {
+	scriptDir := filepath.Join(filepath.Dir(a.settingsPath), "scripts")
+	a.iosSSHScript = configuredScript(iosSSHScriptEnv, filepath.Join(scriptDir, "ios-ssh.sh"))
+	a.iosSSHSetupScript = filepath.Join(scriptDir, "ios-ssh-setup.sh")
+	a.trackerscanCommand = os.Getenv(trackerScanCommandEnv)
+	if a.trackerscanCommand == "" {
+		a.trackerscanCommand = "am_scanner"
+	}
+	if err := os.MkdirAll(scriptDir, 0755); err != nil {
+		return fmt.Errorf("create iOS script directory: %w", err)
+	}
+
+	for _, name := range []string{"ios-ssh.sh", "ios-ssh-setup.sh"} {
+		content, err := iosIntegrationScripts.ReadFile(filepath.Join("scripts", name))
+		if err != nil {
+			return fmt.Errorf("read embedded %s: %w", name, err)
+		}
+		mode := os.FileMode(0644)
+		if strings.HasSuffix(name, ".sh") {
+			mode = 0755
+		}
+		path := filepath.Join(scriptDir, name)
+		if err := os.WriteFile(path, content, mode); err != nil {
+			return fmt.Errorf("write %s: %w", path, err)
+		}
+		if err := os.Chmod(path, mode); err != nil {
+			return fmt.Errorf("set permissions on %s: %w", path, err)
+		}
+	}
+	return nil
+}
+
+func configuredScript(envName, fallback string) string {
+	if configured := strings.TrimSpace(os.Getenv(envName)); configured != "" {
+		return configured
+	}
+	return fallback
+}
 
 func (a *App) DownloadAndInstall(udid string, bundleID string) error {
 	return a.helpersMgr.DownloadAndInstall(udid, bundleID, a.settings.Auth.AppleEmail, a.settings.Auth.ApplePassword, a.tmpIpaPath)
 }
 
 // ------------------------- Main iOS analysis flow ----------------------- //
+const (
+	installLatestIOSAppChoice    = "Install Latest Version"
+	analyzeInstalledIOSAppChoice = "Analyze Installed App"
+	cancelIOSAnalysisChoice      = "Cancel"
+)
+
+func installedIOSAnalysisChoice(choice string) (analyzeInstalled, cancelled bool) {
+	switch choice {
+	case installLatestIOSAppChoice:
+		return false, false
+	case analyzeInstalledIOSAppChoice:
+		return true, false
+	default:
+		return false, true
+	}
+}
+
+func (a *App) chooseInstalledIOSAnalysis(bundleID string) (analyzeInstalled, cancelled bool, err error) {
+	if !a.helpersMgr.IsAppInstalled(a.appinfo.UDID, bundleID) {
+		return false, false, nil
+	}
+
+	name := strings.TrimSpace(a.appinfo.Name)
+	if name == "" {
+		name = bundleID
+	}
+	choice, err := wruntime.MessageDialog(a.ctx, wruntime.MessageDialogOptions{
+		Type:          wruntime.QuestionDialog,
+		Title:         "App Already Installed",
+		Message:       fmt.Sprintf("%s (%s) is already installed on the connected iPhone. Install the latest version before analysis, or analyze the currently installed app with trackerscan only?", name, bundleID),
+		Buttons:       []string{installLatestIOSAppChoice, analyzeInstalledIOSAppChoice, cancelIOSAnalysisChoice},
+		DefaultButton: cancelIOSAnalysisChoice,
+		CancelButton:  cancelIOSAnalysisChoice,
+	})
+	if err != nil {
+		return false, false, fmt.Errorf("show installed app choice dialog: %w", err)
+	}
+	analyzeInstalled, cancelled = installedIOSAnalysisChoice(choice)
+	return analyzeInstalled, cancelled, nil
+}
+
 func (a *App) StartIosAnalysis() {
+	if a.helpersMgr == nil || a.iosMgr == nil {
+		message := "iOS analysis is not initialized"
+		a.emitStatus("error", message, 100)
+		a.Log(message, "App.StartIosAnalysis")
+		return
+	}
+	if a.appinfo.UDID == "" {
+		a.appinfo.UDID = a.helpersMgr.GetUDID()
+	}
+	if a.appinfo.UDID == "" {
+		message := "No connected iOS device was found"
+		a.emitStatus("error", message, 100)
+		a.Log(message, "App.StartIosAnalysis")
+		return
+	}
+
+	analyzeInstalledApp, cancelled, err := a.chooseInstalledIOSAnalysis(a.appinfo.BundleID)
+	if err != nil {
+		a.emitStatus("error", err.Error(), 100)
+		a.Log(err.Error(), "App.StartIosAnalysis")
+		return
+	}
+	if cancelled {
+		a.Log("iOS analysis cancelled from installed app choice", "App.StartIosAnalysis")
+		return
+	}
+
 	a.emitStatus("start", "Starting analysis", 0)
 	a.Log("Starting analysis for: "+a.appinfo.BundleID, "App.StartAnalysis")
 
-	// Reset AppInfo struct for fresh analysis
 	a.appinfo.SDKs = make(map[string][]string)
 	a.appinfo.IosPermissions = make(map[string]models.IosPermissionDetail)
 	a.appinfo.BundleInfo = make(map[string]any)
 	a.appinfo.ResultsPath = ""
+	a.appinfo.TrackerScanPath = ""
 
-	a.emitStatus("download", "Downloading and installing", 10)
-	if err := a.DownloadAndInstall(a.appinfo.UDID, a.appinfo.BundleID); err != nil {
-		message := fmt.Sprintf("Unable to download or install %s automatically: %v. Install the app directly from the App Store on the device, then retry the analysis.", a.appinfo.BundleID, err)
-		a.Log(message, "App.StartIosAnalysis")
-		a.emitStatus("error", message, 100)
-		return
+	result, err := a.iosMgr.RunAppAnalysis(a.ctx, ios.AnalysisOptions{
+		UDID:                a.appinfo.UDID,
+		BundleID:            a.appinfo.BundleID,
+		AnalyzeInstalledApp: analyzeInstalledApp,
+		AppleEmail:          a.settings.Auth.AppleEmail,
+		ApplePassword:       a.settings.Auth.ApplePassword,
+		IPADirectory:        a.tmpIpaPath,
+		MinimumOSVersion:    a.appinfo.MinimumOSVersion,
+		TrackerScanPath:     filepath.Join(a.iosReportPath, fmt.Sprintf("%s_%d_trackerscan.json", a.appinfo.BundleID, time.Now().Unix())),
+		Progress:            a.emitStatus,
+	})
+	if result.TrackerWarning != nil {
+		a.Log("Trackerscan warning: "+result.TrackerWarning.Error(), "App.StartIosAnalysis")
 	}
-
-	a.emitStatus("frida", "Running Frida analysis", 35)
-	enrichedPermissions, sdks, bundleInfo, err := a.iosMgr.RunCompleteAnalysis(a.appinfo.UDID, a.appinfo.BundleID)
 	if err != nil {
-		a.emitStatus("error", "Frida analysis failed: "+err.Error(), 100)
-		a.Log("Error during frida analysis: "+err.Error(), "App.StartAnalysis")
+		if result.MinimumOSVersion != "" {
+			a.appinfo.MinimumOSVersion = result.MinimumOSVersion
+		}
+		if result.TrackerScanPath != "" {
+			a.appinfo.TrackerScanPath = result.TrackerScanPath
+			a.appinfo.IosPermissions = result.Permissions
+			a.appinfo.SDKs = result.SDKs
+			a.appinfo.BundleInfo = result.BundleInfo
+			if version, ok := result.BundleInfo["shortVersion"].(string); ok {
+				a.appinfo.Version = version
+			}
+		}
+		message := err.Error()
+		a.emitStatus("error", message, 100)
+		a.Log(message, "App.StartIosAnalysis")
 		return
 	}
 
 	time.Sleep(time.Second * 2)
 
-	a.appinfo.IosPermissions = enrichedPermissions
-	a.appinfo.SDKs = sdks
-	a.appinfo.BundleInfo = bundleInfo
-	if version, ok := bundleInfo["shortVersion"].(string); ok {
+	a.appinfo.MinimumOSVersion = result.MinimumOSVersion
+	a.appinfo.TrackerScanPath = result.TrackerScanPath
+	a.appinfo.IosPermissions = result.Permissions
+	a.appinfo.SDKs = result.SDKs
+	a.appinfo.BundleInfo = result.BundleInfo
+	if version, ok := result.BundleInfo["shortVersion"].(string); ok {
 		a.appinfo.Version = version
-	}
-
-	if err := a.iosMgr.Cleanup(); err != nil {
-		a.emitStatus("cleanup", "Cleanup warning: "+err.Error(), 75)
-		a.Log("Warning: Error during frida cleanup: "+err.Error(), "App.StartAnalysis")
 	}
 
 	a.emitStatus("report", "Generating report", 85)
@@ -506,27 +656,61 @@ func (a *App) StartAndroidAnalysis() {
 // -- Frontend Wrappers -- //
 
 func (a *App) LoadFromPhone() string {
-	// Get UDID if not set
-	if a.appinfo.UDID == "" {
-		a.appinfo.UDID = a.helpersMgr.GetUDID()
+	if a.iosMgr == nil {
+		return `{"error":"iOS manager is not initialized"}`
 	}
-	// Get installed apps directly from helpers
-	programs := a.helpersMgr.GetInstalledApps(a.appinfo.UDID)
-	a.appinfo.InstalledApps = programs
-	// Search iTunes for each installed app bundleID to get more info and store results in a list
-	var results []map[string]interface{}
-	for _, program := range programs {
-		itunesResult := a.appstoresMgr.ItunesSearchBundle(program.CFBundleIdentifier)
-		if itunesResult != "" {
-			var result map[string]interface{}
-			if err := json.Unmarshal([]byte(itunesResult), &result); err == nil {
-				results = append(results, result)
-			}
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	a.phoneApps = nil
+	apps, err := a.iosMgr.ListInstalledApps(ctx)
+	if err != nil {
+		a.Log("Unable to list installed apps with trackerscan: "+err.Error(), "App.LoadFromPhone")
+		return phoneErrorPayload(err)
+	}
+	a.phoneApps = apps
+	a.appinfo.InstalledApps = make([]helpers.InstalledApp, len(apps))
+	results := make([]map[string]interface{}, 0, len(apps))
+	for index, app := range apps {
+		a.appinfo.InstalledApps[index] = app
+		a.appinfo.InstalledApps[index].IconDataURI = ""
+		results = append(results, map[string]interface{}{
+			"trackId":       0,
+			"trackName":     app.CFBundleDisplayName,
+			"bundleId":      app.CFBundleIdentifier,
+			"version":       app.Version,
+			"artworkUrl512": app.IconDataURI,
+			"sellerName":    "Installed on device",
+			"isInstalled":   true,
+			"artistViewUrl": "",
+			"description":   "",
+			"trackViewUrl":  "",
+		})
+	}
+	jsonBytes, err := json.Marshal(results)
+	if err != nil {
+		a.Log("Unable to encode installed-app list: "+err.Error(), "App.LoadFromPhone")
+		return phoneErrorPayload(err)
+	}
+	return string(jsonBytes)
+}
+
+func phoneErrorPayload(err error) string {
+	payload, marshalErr := json.Marshal(map[string]string{"error": err.Error()})
+	if marshalErr != nil {
+		return `{"error":"failed to encode installed-app error"}`
+	}
+	return string(payload)
+}
+
+func (a *App) installedPhoneApp(bundleID string) (helpers.InstalledApp, bool) {
+	for _, app := range a.phoneApps {
+		if app.CFBundleIdentifier == bundleID {
+			return app, true
 		}
 	}
-	// Convert results to JSON string to return to frontend
-	jsonBytes, _ := json.Marshal(results)
-	return string(jsonBytes)
+	return helpers.InstalledApp{}, false
 }
 
 // Authentication function for Apple ID credentials. This is a wrapper around the helpers.Manager.AuthenticateAppleID method.
@@ -561,8 +745,27 @@ func (a *App) SelectItem(trackName string, trackId int, bundleId string, artwork
 	a.appinfo.ArtistViewUrl = artistViewUrl
 	a.appinfo.Description = description
 	a.appinfo.AppStoreURL = trackViewUrl
+	a.appinfo.MinimumOSVersion = ""
+	installedApp, isInstalled := a.installedPhoneApp(bundleId)
+	a.appinfo.Version = ""
+	if isInstalled {
+		a.appinfo.Version = installedApp.Version
+		a.appinfo.AppStoreIconPath = installedApp.IconPath
+	} else {
+		a.appinfo.AppStoreIconPath = ""
+	}
+	if response := a.appstoresMgr.ItunesSearchBundle(bundleId); response != "" {
+		minimumOSVersion, err := ios.MinimumOSVersionFromStoreResponse(response)
+		if err != nil {
+			a.Log("Unable to read app MinimumOSVersion from App Store lookup: "+err.Error(), "App.SelectItem")
+		} else {
+			a.appinfo.MinimumOSVersion = minimumOSVersion
+		}
+	}
 
-	a.appinfo.AppStoreIconPath = a.helpersMgr.DownloadAndSaveAppIcon(artworkUrl, bundleId)
+	if !isInstalled {
+		a.appinfo.AppStoreIconPath = a.helpersMgr.DownloadAndSaveAppIcon(artworkUrl, bundleId)
+	}
 
 	// a.Log(fmt.Sprintf("App info updated:\n  Name: %s\n  BundleID: %s\n  ArtworkUrl: %s\n  SellerName: %s\n  ArtistViewUrl: %s\n  Description: %s", a.appinfo.Name, a.appinfo.BundleID, a.appinfo.ArtworkUrl, a.appinfo.SellerName, a.appinfo.ArtistViewUrl, a.appinfo.Description), "App.SelectItem")
 }

@@ -55,11 +55,13 @@ func TestPushToDatabasePersistsAppInfo(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "nested", "app_database.json")
 	runner := &CLIRunner{dbPath: dbPath}
 	info := models.AppInfo{
-		BundleID:    "com.example.app",
-		Name:        "Example App",
-		Version:     "1.12.1",
-		AppStoreURL: "https://apps.apple.com/app/example",
-		SDKs:        map[string][]string{"iOS": {"ExampleSDK"}},
+		BundleID:         "com.example.app",
+		Name:             "Example App",
+		Version:          "1.12.1",
+		AppStoreURL:      "https://apps.apple.com/app/example",
+		MinimumOSVersion: "16.0",
+		TrackerScanPath:  "/tmp/example-trackerscan.json",
+		SDKs:             map[string][]string{"iOS": {"ExampleSDK"}},
 	}
 
 	if err := runner.pushToDatabase(info); err != nil {
@@ -82,7 +84,10 @@ func TestPushToDatabasePersistsAppInfo(t *testing.T) {
 	if !ok {
 		t.Fatalf("database does not contain version %s", info.Version)
 	}
-	if appHistory.Name != info.Name || appHistory.AppStoreURL != info.AppStoreURL || stored.SDKs["iOS"][0] != "ExampleSDK" {
+	if appHistory.Name != info.Name || appHistory.AppStoreURL != info.AppStoreURL ||
+		stored.SDKs["iOS"][0] != "ExampleSDK" ||
+		stored.MinimumOSVersion != info.MinimumOSVersion ||
+		stored.TrackerScanPath != info.TrackerScanPath {
 		t.Errorf("stored app analysis does not match: %+v", appHistory)
 	}
 	if _, err := time.Parse(time.RFC3339, stored.AnalysisDate); err != nil {
@@ -162,5 +167,54 @@ func TestWaitForManualDownloadRequiresStoreURL(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no App Store URL") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestWriteClassNamesFileWritesOneNamePerLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "classes.txt")
+	gotPath, err := writeClassNamesFile(path, []string{"FirstClass", "SecondClass"})
+	if err != nil {
+		t.Fatalf("writeClassNamesFile returned an error: %v", err)
+	}
+	if gotPath != path {
+		t.Fatalf("writeClassNamesFile path = %q, want %q", gotPath, path)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "FirstClass\nSecondClass\n" {
+		t.Fatalf("unexpected class file contents %q", contents)
+	}
+}
+
+func TestTrackerOutputPathsUsesSafeBundleID(t *testing.T) {
+	classDir := filepath.Join(t.TempDir(), "ios", "classlogs")
+	runner := &CLIRunner{iosClassLogPath: classDir}
+
+	jsonPath, classesPath, err := runner.trackerOutputPaths("../../com.example/app")
+	if err != nil {
+		t.Fatalf("trackerOutputPaths returned an error: %v", err)
+	}
+	if filepath.Dir(classesPath) != classDir {
+		t.Fatalf("class names path escaped class log directory: %q", classesPath)
+	}
+	if filepath.Dir(jsonPath) != filepath.Join(filepath.Dir(classDir), "trackerscan") {
+		t.Fatalf("unexpected JSON path: %q", jsonPath)
+	}
+	if strings.Contains(filepath.Base(classesPath), "/") || strings.Contains(filepath.Base(classesPath), "..") {
+		t.Fatalf("bundle ID was not safely encoded in output filename: %q", classesPath)
+	}
+}
+
+func TestResolveIOSSSHScriptUsesConfiguredPath(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "ssh-wrapper")
+	setup := filepath.Join(t.TempDir(), "ssh-setup")
+	t.Setenv("APPMONITOR_IOS_SSH_SCRIPT", script)
+	t.Setenv("APPMONITOR_IOS_SSH_SETUP_SCRIPT", setup)
+
+	gotScript, gotSetup := resolveIOSSSHScript(filepath.Join(t.TempDir(), "settings.json"))
+	if gotScript != script || gotSetup != setup {
+		t.Fatalf("resolveIOSSSHScript() = (%q, %q), want (%q, %q)", gotScript, gotSetup, script, setup)
 	}
 }

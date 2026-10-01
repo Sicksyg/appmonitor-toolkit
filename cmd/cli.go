@@ -40,6 +40,9 @@ type CLIRunner struct {
 	outputPath      string
 	reportPath      string
 	iosClassLogPath string
+	iosSSHScript    string
+	iosSSHSetup     string
+	trackerCommand  string
 	dbPath          string
 	helpersMgr      *helpers.Manager
 	iosMgr          *ios.Manager
@@ -51,38 +54,93 @@ type CLIRunner struct {
 	platform        string
 	manualDownload  bool
 	uninstallAfter  bool
+	fridaEnabled    bool
 	interactive     bool
 	scanner         *bufio.Scanner
 }
 
+// printUsage renders a grouped, human-friendly help screen instead of flag's default alphabetical dump.
+func printUsage() {
+	fmt.Fprintf(os.Stderr, `AppMonitor CLI — analyze iOS/Android apps for SDKs and permissions
+
+Usage:
+  %s [flags]
+
+Input (choose one, or omit to be prompted):
+  -c, -csv string        Path to CSV file containing app list
+  -b, -bundle string     Single app bundle ID to analyze
+
+Target:
+  -p, -platform string   Target platform: 'ios' or 'android' (default "ios")
+  -u, -udid string       iOS Device UDID (optional, auto-detected if omitted)
+
+Output & Config:
+  -o, -output string     Custom output directory for the database
+  -f, -config string     Custom path to settings.json
+
+Behavior:
+  -m, -manual-download   Open each iOS app in the App Store and wait for manual download
+  --frida                Also run Frida analysis after trackerscan (iOS only)
+  -x, -uninstall-after   Uninstall each analyzed iOS app after processing
+  -a, -auto              Non-interactive mode (automatically proceed on success)
+  -n, -no-interactive    Alias for -auto (non-interactive mode)
+
+Examples:
+  %s -csv apps.csv -platform ios
+  %s -b com.example.app -p android -a
+  %s -csv apps.csv -m -x
+
+`, os.Args[0], os.Args[0], os.Args[0], os.Args[0])
+}
+
 func main() {
-	csvPathFlag := flag.String("csv", "", "Path to CSV file containing app list")
-	bundleFlag := flag.String("bundle", "", "Single app bundle ID to analyze")
-	platformFlag := flag.String("platform", "ios", "Target platform: 'ios' or 'android'")
-	udidFlag := flag.String("udid", "", "iOS Device UDID (optional, auto-detected if omitted)")
-	outputPathFlag := flag.String("output", "", "Custom output directory for the database")
-	configPathFlag := flag.String("config", "", "Custom path to settings.json")
-	manualDownloadFlag := flag.Bool("manual-download", false, "Open each iOS app in the App Store and wait for manual download")
-	uninstallAfterFlag := flag.Bool("uninstall-after", false, "Uninstall each analyzed iOS app after processing")
-	autoFlag := flag.Bool("auto", false, "Non-interactive mode (automatically proceed on success)")
-	noInteractiveFlag := flag.Bool("no-interactive", false, "Alias for -auto (non-interactive mode)")
+	var csvPathFlag, bundleFlag, platformFlag, udidFlag, outputPathFlag, configPathFlag string
+	var manualDownloadFlag, uninstallAfterFlag, autoFlag, noInteractiveFlag, fridaFlag bool
+
+	flag.StringVar(&csvPathFlag, "csv", "", "Path to CSV file containing app list")
+	flag.StringVar(&csvPathFlag, "c", "", "Shorthand for -csv")
+	flag.StringVar(&bundleFlag, "bundle", "", "Single app bundle ID to analyze")
+	flag.StringVar(&bundleFlag, "b", "", "Shorthand for -bundle")
+	flag.StringVar(&platformFlag, "platform", "ios", "Target platform: 'ios' or 'android'")
+	flag.StringVar(&platformFlag, "p", "ios", "Shorthand for -platform")
+	flag.StringVar(&udidFlag, "udid", "", "iOS Device UDID (optional, auto-detected if omitted)")
+	flag.StringVar(&udidFlag, "u", "", "Shorthand for -udid")
+	flag.StringVar(&outputPathFlag, "output", "", "Custom output directory for the database")
+	flag.StringVar(&outputPathFlag, "o", "", "Shorthand for -output")
+	flag.StringVar(&configPathFlag, "config", "", "Custom path to settings.json")
+	flag.StringVar(&configPathFlag, "f", "", "Shorthand for -config")
+	flag.BoolVar(&manualDownloadFlag, "manual-download", false, "Open each iOS app in the App Store and wait for manual download")
+	flag.BoolVar(&manualDownloadFlag, "m", false, "Shorthand for -manual-download")
+	flag.BoolVar(&fridaFlag, "frida", false, "Also run Frida analysis after trackerscan (iOS only)")
+	flag.BoolVar(&uninstallAfterFlag, "uninstall-after", false, "Uninstall each analyzed iOS app after processing")
+	flag.BoolVar(&uninstallAfterFlag, "x", false, "Shorthand for -uninstall-after")
+	flag.BoolVar(&autoFlag, "auto", false, "Non-interactive mode (automatically proceed on success)")
+	flag.BoolVar(&autoFlag, "a", false, "Shorthand for -auto")
+	flag.BoolVar(&noInteractiveFlag, "no-interactive", false, "Alias for -auto (non-interactive mode)")
+	flag.BoolVar(&noInteractiveFlag, "n", false, "Shorthand for -no-interactive")
+
+	flag.Usage = printUsage
 	flag.Parse()
 
-	isAuto := *autoFlag || *noInteractiveFlag
+	isAuto := autoFlag || noInteractiveFlag
 
 	fmt.Println("==================================================")
 	fmt.Println("             AppMonitor CLI Runner                ")
 	fmt.Println("==================================================")
 
-	runner, err := initCLIRunner(*configPathFlag, *outputPathFlag, *udidFlag, strings.ToLower(*platformFlag), *manualDownloadFlag, *uninstallAfterFlag, !isAuto)
+	runner, err := initCLIRunner(configPathFlag, outputPathFlag, udidFlag, strings.ToLower(platformFlag), manualDownloadFlag, uninstallAfterFlag, !isAuto)
 	if err != nil {
 		log.Fatalf("❌ Failed to initialize CLI runner: %v", err)
+	}
+	runner.fridaEnabled = fridaFlag
+	if runner.iosMgr != nil {
+		defer runner.iosMgr.StopSSH()
 	}
 
 	// Determine targets: either single bundle ID, CSV file, or prompt user
 	var targets []AppTarget
-	csvPath := *csvPathFlag
-	bundleID := *bundleFlag
+	csvPath := csvPathFlag
+	bundleID := bundleFlag
 
 	if bundleID != "" {
 		targets = append(targets, AppTarget{
@@ -170,9 +228,21 @@ func initCLIRunner(customConfigPath, customOutputPath, udidOverride, platform st
 	})
 
 	runner.iosMgr = ios.NewManager(runner.Log, ios.Paths{
-		FridaRoot:    projectRoot,
-		ClassLogPath: runner.iosClassLogPath,
+		FridaRoot:          projectRoot,
+		ClassLogPath:       runner.iosClassLogPath,
+		Helpers:            runner.helpersMgr,
+		SSHScriptPath:      runner.iosSSHScript,
+		SSHSetupScriptPath: runner.iosSSHSetup,
+		LDIDPath:           toolPaths.LDID,
+		DittoPath:          os.Getenv("APPMONITOR_DITTO_PATH"),
+		LibPath:            libDir,
+		IProxyPath:         toolPaths.IProxy,
+		SSHIdentityPath:    filepath.Join(filepath.Dir(runner.settingsPath), "ssh", "id_ed25519"),
+		TrackerScanCommand: runner.trackerCommand,
 	})
+	if runner.platform == "ios" {
+		runner.iosMgr.StartSSH(ctx)
+	}
 
 	runner.androidMgr = android.NewManager(runner.Log, android.Paths{
 		OutputPath: runner.outputPath,
@@ -244,6 +314,11 @@ func (r *CLIRunner) setupWorkspace(customConfigPath, customOutputPath string) er
 
 	r.iosClassLogPath = filepath.Join(r.reportPath, "ios", "classlogs")
 	r.dbPath = filepath.Join(r.reportPath, "app_database.json")
+	r.iosSSHScript, r.iosSSHSetup = resolveIOSSSHScript(r.settingsPath)
+	r.trackerCommand = os.Getenv("APPMONITOR_TRACKERSCAN_COMMAND")
+	if r.trackerCommand == "" {
+		r.trackerCommand = "am_scanner"
+	}
 
 	for _, p := range []string{r.iosClassLogPath, r.outputPath} {
 		if err := os.MkdirAll(p, 0755); err != nil {
@@ -252,6 +327,119 @@ func (r *CLIRunner) setupWorkspace(customConfigPath, customOutputPath string) er
 	}
 
 	return nil
+}
+
+func resolveIOSSSHScript(settingsPath string) (string, string) {
+	if configured := strings.TrimSpace(os.Getenv("APPMONITOR_IOS_SSH_SCRIPT")); configured != "" {
+		setup := strings.TrimSpace(os.Getenv("APPMONITOR_IOS_SSH_SETUP_SCRIPT"))
+		if setup == "" {
+			setup = filepath.Join(filepath.Dir(configured), "ios-ssh-setup.sh")
+		}
+		return configured, setup
+	}
+
+	candidates := []string{
+		filepath.Join(filepath.Dir(settingsPath), "scripts", "ios-ssh.sh"),
+		filepath.Join("scripts", "ios-ssh.sh"),
+	}
+	if executable, err := os.Executable(); err == nil {
+		executableDir := filepath.Dir(executable)
+		candidates = append(candidates,
+			filepath.Join(executableDir, "scripts", "ios-ssh.sh"),
+			filepath.Join(executableDir, "..", "scripts", "ios-ssh.sh"),
+		)
+	}
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate, filepath.Join(filepath.Dir(candidate), "ios-ssh-setup.sh")
+		}
+	}
+	return "", ""
+}
+
+func (r *CLIRunner) trackerOutputPaths(bundleID string) (jsonPath, classNamesPath string, err error) {
+	outputDir := filepath.Join(filepath.Dir(r.iosClassLogPath), "trackerscan")
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		return "", "", fmt.Errorf("⚠️create trackerscan output directory: %w", err)
+	}
+	timestamp := time.Now().Format("20060102_150405.000000000")
+	prefix := safeOutputName(bundleID)
+	return filepath.Join(outputDir, prefix+"_trackerscan_"+timestamp+".json"),
+		filepath.Join(r.iosClassLogPath, prefix+"_trackerscan_classes_"+timestamp+".txt"), nil
+}
+
+func safeOutputName(value string) string {
+	var safe strings.Builder
+	for _, char := range value {
+		switch {
+		case char >= 'a' && char <= 'z', char >= 'A' && char <= 'Z',
+			char >= '0' && char <= '9', char == '-', char == '_', char == '.':
+			safe.WriteRune(char)
+		default:
+			safe.WriteByte('_')
+		}
+	}
+	name := strings.ReplaceAll(strings.Trim(safe.String(), "."), "..", "_")
+	if name == "" {
+		return "app"
+	}
+	return name
+}
+
+func writeClassNamesFile(path string, classNames []string) (string, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", fmt.Errorf("create class log directory: %w", err)
+	}
+	contents := strings.Join(classNames, "\n")
+	if len(classNames) > 0 {
+		contents += "\n"
+	}
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		return "", fmt.Errorf("write class names: %w", err)
+	}
+	return path, nil
+}
+
+func mergeCLISDKs(primary, additional map[string][]string) map[string][]string {
+	merged := make(map[string][]string, len(primary)+len(additional))
+	for platform, sdks := range primary {
+		merged[platform] = append([]string(nil), sdks...)
+	}
+	for platform, sdks := range additional {
+		seen := make(map[string]struct{}, len(merged[platform]))
+		for _, name := range merged[platform] {
+			seen[name] = struct{}{}
+		}
+		for _, name := range sdks {
+			if _, exists := seen[name]; !exists {
+				merged[platform] = append(merged[platform], name)
+				seen[name] = struct{}{}
+			}
+		}
+	}
+	return merged
+}
+
+func mergeCLIPermissions(primary, additional map[string]models.IosPermissionDetail) map[string]models.IosPermissionDetail {
+	merged := make(map[string]models.IosPermissionDetail, len(primary)+len(additional))
+	for name, permission := range primary {
+		merged[name] = permission
+	}
+	for name, permission := range additional {
+		merged[name] = permission
+	}
+	return merged
+}
+
+func mergeCLIMaps(primary, additional map[string]any) map[string]any {
+	merged := make(map[string]any, len(primary)+len(additional))
+	for name, value := range primary {
+		merged[name] = value
+	}
+	for name, value := range additional {
+		merged[name] = value
+	}
+	return merged
 }
 
 func (r *CLIRunner) loadSettings(settingsDir string) error {
@@ -607,11 +795,13 @@ func (r *CLIRunner) processIOSApp(target AppTarget) (models.AppInfo, error) {
 	// 2. Install the app automatically, or use the App Store manually when forced.
 	fmt.Printf("📱 Checking if %s is installed on device (%s)...\n", bundleID, udid)
 	isInstalled := r.isAppInstalled(udid, bundleID)
-	if r.manualDownload {
+	if isInstalled {
+		fmt.Printf("✅ %s is already installed on the device, skipping download step.\n", bundleID)
+	} else if r.manualDownload {
 		if err := r.waitForManualDownload(appInfo.AppStoreURL, bundleID, udid); err != nil {
 			return appInfo, err
 		}
-	} else if !isInstalled {
+	} else {
 		if r.settings.Options.DownloadFromAppStore && r.settings.Auth.AppleEmail != "" && !strings.Contains(r.settings.Auth.AppleEmail, "your-email") {
 			fmt.Printf("📥 App not installed. Attempting download and install via ipatool...\n")
 			if err := r.downloadAndInstall(udid, bundleID); err != nil {
@@ -637,27 +827,67 @@ func (r *CLIRunner) processIOSApp(target AppTarget) (models.AppInfo, error) {
 		}()
 	}
 
-	// 3. Run Frida analysis
-	fmt.Printf("🔬 Running Frida analysis on %s...\n", bundleID)
-	enrichedPermissions, sdks, bundleInfo, err := r.iosMgr.RunCompleteAnalysis(udid, bundleID)
+	trackerJSONPath, classNamesPath, err := r.trackerOutputPaths(bundleID)
 	if err != nil {
-		_ = r.iosMgr.Cleanup()
-		return appInfo, fmt.Errorf("⚠️frida analysis failed: %w", err)
+		return appInfo, err
+	}
+	fmt.Printf("🔬 Running trackerscan on %s...\n", bundleID)
+	trackerResult, err := r.iosMgr.RunAppAnalysis(r.ctx, ios.AnalysisOptions{
+		UDID:                udid,
+		BundleID:            bundleID,
+		AnalyzeInstalledApp: true,
+		TrackerScanPath:     trackerJSONPath,
+	})
+	if err != nil {
+		return appInfo, fmt.Errorf("⚠️trackerscan analysis failed: %w", err)
+	}
+	if trackerResult.TrackerScanPath != "" {
+		appInfo.TrackerScanPath = trackerResult.TrackerScanPath
+		appInfo.Version = trackerResult.Version
+		appInfo.IosPermissions = trackerResult.Permissions
+		appInfo.SDKs = trackerResult.SDKs
+		appInfo.BundleInfo = trackerResult.BundleInfo
+		classLogPath, saveErr := writeClassNamesFile(classNamesPath, trackerResult.Classes)
+		if saveErr != nil {
+			return appInfo, fmt.Errorf("⚠️save trackerscan class names: %w", saveErr)
+		}
+		fmt.Printf("📝 Saved %d trackerscan class names to %s\n", len(trackerResult.Classes), classLogPath)
+	}
+	if trackerResult.TrackerWarning != nil {
+		fmt.Printf("⚠️  Trackerscan failed: %v\n", trackerResult.TrackerWarning)
+		r.Log("Trackerscan failed: "+trackerResult.TrackerWarning.Error(), "CLI.processIOSApp")
+		if !r.fridaEnabled {
+			return appInfo, fmt.Errorf("⚠️trackerscan analysis failed: %w", trackerResult.TrackerWarning)
+		}
+	} else if trackerResult.TrackerScanPath == "" {
+		return appInfo, fmt.Errorf("⚠️trackerscan did not produce a scan result")
 	}
 
-	appInfo.IosPermissions = enrichedPermissions
-	appInfo.SDKs = sdks
-	appInfo.BundleInfo = bundleInfo
-	if version, ok := bundleInfo["shortVersion"].(string); ok {
-		appInfo.Version = version
+	if r.fridaEnabled {
+		fmt.Printf("🔬 Running optional Frida analysis on %s...\n", bundleID)
+		fridaPermissions, fridaSDKs, fridaBundleInfo, fridaErr := r.iosMgr.RunCompleteAnalysis(udid, bundleID)
+		if fridaErr != nil {
+			_ = r.iosMgr.Cleanup()
+			return appInfo, fmt.Errorf("⚠️frida analysis failed: %w", fridaErr)
+		}
+		appInfo.IosPermissions = mergeCLIPermissions(appInfo.IosPermissions, fridaPermissions)
+		appInfo.SDKs = mergeCLISDKs(appInfo.SDKs, fridaSDKs)
+		appInfo.BundleInfo = mergeCLIMaps(appInfo.BundleInfo, fridaBundleInfo)
+		if appInfo.Version == "" {
+			if version, ok := fridaBundleInfo["shortVersion"].(string); ok {
+				appInfo.Version = version
+			}
+		}
+		if err := r.iosMgr.Cleanup(); err != nil {
+			r.Log("Warning during cleanup: "+err.Error(), "CLI.processIOSApp")
+		}
 	}
 
-	// Cleanup Frida
-	if err := r.iosMgr.Cleanup(); err != nil {
-		r.Log("Warning during cleanup: "+err.Error(), "CLI.processIOSApp")
+	if appInfo.Version == "" {
+		appInfo.Version = "unknown"
 	}
 
-	// 4. Push to database.
+	// Save the combined scan results to the database.
 	if err := r.pushToDatabase(appInfo); err != nil {
 		r.Log("Failed to push to database: "+err.Error(), "CLI.processIOSApp")
 		return appInfo, fmt.Errorf("⚠️database save failed: %w", err)
@@ -830,7 +1060,11 @@ func (r *CLIRunner) waitForManualDownload(storeURL, bundleID, udid string) error
 	var openErr error
 	for attempt := 1; attempt <= maxOpenAttempts; attempt++ {
 		fmt.Printf("🛍️  Opening %s in the iPhone App Store (attempt %d/%d)...\n", bundleID, attempt, maxOpenAttempts)
-		openErr = r.iosMgr.OpenAppInAppStore(udid, storeURL)
+		ctx := r.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		openErr = r.iosMgr.OpenURL(ctx, storeURL)
 		if openErr == nil {
 			break
 		}
