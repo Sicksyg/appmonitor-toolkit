@@ -3,7 +3,7 @@
 AppMonitor is an application monitoring tool that provides real-time insights into application infrastructure and tracking capabilities. At the heart of the tool is the analysis of Software Development Kits (SDKs) - third party infrastructures that enable essential functionality and tracking.
 
 ## Application Screenshot
-![AppMonitor Screenshot](AppMonitor_screenshot.png)
+![AppMonitor Screenshot](static/AppMonitor_screenshot.png)
 
 ## Requirements
 - **Operating System**: macOS
@@ -259,8 +259,8 @@ This repository is licensed under Creative Commons Attribution 4.0 International
 This repository and its software components are a part of the Datafied Living Project and has received funding from the European Research Council (ERC) under
 the European Union’s Horizon 2020 research and innovation programme [Datafied Living at The University of Copenhagen](https://datafiedliving.ku.dk/) (Grant agreement ID: 947735) and the Horizon ERC 2024 POC [AppMonitor](https://cordis.europa.eu/project/id/101189401) (Grant agreement ID: 101189401)
 
-![image](https://github.com/user-attachments/assets/fe732ac6-0468-4421-a7a6-62e7b24c1633)
-![image](https://designguide.ku.dk/download/co-branding/ku_co_uk_h.jpg)
+![image](static/erc_logo.png)
+![image](static/ucph_logo.jpg)
 
 
 # Use
