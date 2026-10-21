@@ -1,25 +1,13 @@
 # Frida setup and experimental analysis
 
-Frida is an optional, retained analysis path. AppMonitor's primary iOS
-evidence collection uses `am_scanner`; Frida may provide additional runtime
-analysis, but can be less reliable on devices or apps that resist
-instrumentation. Frida may be changed or removed in a future AppMonitor
-release.
+Frida is available only as an optional standalone CLI analysis pass. The GUI
+and the CLI's default iOS workflow use `am_scanner` without Frida.
 
 ## End-user setup
 
-Frida is **not required** for:
-
-- Loading the app list from a connected phone.
-- Analyzing an app that is already installed using the installed-app option.
-- The standalone CLI's default iOS analysis.
-
-The normal GUI flow for installing the latest version runs `am_scanner` and
-then the Frida analysis. To use that flow, install and start a `frida-server`
-on the jailbroken phone. Its version must be compatible with the Frida runtime
-used by AppMonitor. If Frida fails, scanner evidence may still be available
-and AppMonitor reports the Frida failure.
-
+To run the optional Frida pass, use `--frida` with the standalone CLI. This
+requires a `frida-server` on the jailbroken phone with a version compatible
+with AppMonitor's Frida runtime. If Frida fails, the CLI reports the error.
 See the [Frida iOS setup documentation](https://frida.re/docs/ios/) for
 device-side installation guidance.
 
@@ -60,5 +48,4 @@ the Frida pass after the scanner. See [CLI usage](cli.md).
 - Confirm the app is installed and can launch on the device.
 - Check AppMonitor's log for setup, spawn, attach, and agent compilation
   errors.
-- If Frida fails, run the scanner-only workflow to obtain the available
-  static and on-device evidence without Frida.
+- Omit `--frida` to run the scanner-only CLI workflow.

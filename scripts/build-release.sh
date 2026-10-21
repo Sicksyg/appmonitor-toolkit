@@ -335,7 +335,8 @@ fi
 report_dir="$HOME/Documents/AppMonitor Output"
 app_support_dir="$HOME/Library/Application Support/AppMonitor"
 
-rm -rf "$report_dir"
+# Remove the existing report directory and app support directory
+# rm -rf "$report_dir"
 if [[ -d "$app_support_dir" ]]; then
 	rm -rf "$app_support_dir/bin" "$app_support_dir/frida" "$app_support_dir/lib"
 fi

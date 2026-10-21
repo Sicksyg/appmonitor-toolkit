@@ -99,6 +99,27 @@ func TestDecodeTrackerScanDumpAcceptsRuntimeErrorWithEvidence(t *testing.T) {
 	}
 }
 
+func TestAnalyseDetectSDKDetailsIncludesSignatureMetadata(t *testing.T) {
+	manager := &Manager{logger: func(string, string) {}}
+	details := manager.AnalyseDetectSDKDetails([]string{"FBSDKApplicationDelegate"})
+
+	facebook, ok := details["Facebook"]
+	if !ok {
+		t.Fatal("Facebook SDK was not detected")
+	}
+	if facebook.ID != 1 ||
+		facebook.Regex != "FBSDK" ||
+		!strings.Contains(facebook.Comment, "Meta") ||
+		facebook.Detail == "" ||
+		facebook.Website == "" ||
+		facebook.Link != "github.com/facebook/facebook-ios-sdk" {
+		t.Fatalf("Facebook signature metadata was not retained: %+v", facebook)
+	}
+	if len(facebook.Classes) != 1 || facebook.Classes[0] != "FBSDKApplicationDelegate" {
+		t.Fatalf("unexpected SDK class evidence: %+v", facebook.Classes)
+	}
+}
+
 func TestTrackerScanRemoteCommandAddsRootlessPaths(t *testing.T) {
 	command := trackerScanRemoteCommand("trackerscan", "com.example.app")
 	for _, expected := range []string{

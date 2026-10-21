@@ -28,22 +28,12 @@ go test -tags livefrida ./analysis -short
 ```
 
 ## Run analysis without GUI
-Use the CLI runner to execute Frida analysis directly from terminal (no Wails dev reloads):
+Use the standalone CLI to run the same iOS scanner workflow without opening the
+GUI. Frida is optional and only runs when `--frida` is supplied:
 
 ```bash
-go run ./cmd/frida-analysis -udid 32a5b4d0c84ba01c4f35d7eb3c31c283fadedcec -bundle dk.dr.tv
-```
-
-Quick setup-only check (spawn/attach + cleanup):
-
-```bash
-go run ./cmd/frida-analysis -udid 32a5b4d0c84ba01c4f35d7eb3c31c283fadedcec -bundle dk.dr.tv -setup-only
-```
-
-Write JSON output to a file:
-
-```bash
-go run ./cmd/frida-analysis -udid 32a5b4d0c84ba01c4f35d7eb3c31c283fadedcec -bundle dk.dr.tv -json-out tmp/drtv_analysis.json
+go run ./cmd -bundle dk.dr.tv
+go run ./cmd -bundle dk.dr.tv --frida
 ```
 
 ## Live test configuration

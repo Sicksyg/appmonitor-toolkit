@@ -193,115 +193,67 @@ func (m *Manager) LoadSDKSignatures() []SDKSignature {
 }
 
 func (m *Manager) AnalyseDetectSDKs(classlist []string) map[string][]string {
-	// fmt.Printf("Number of classes in analysis results: %d\n", len(classList))
-	// fmt.Printf("This is a class list snippet: %v\n", classList[len(classList)-5:])
-
-	// Load signatures
-	sdkSignatures := m.LoadSDKSignatures()
-
-	// Compile regex signatures from loaded signatures
-	compiledSignatures := []struct {
-		Signature SDKSignature
-		Regex     *regexp.Regexp
-	}{}
-
-	for _, sig := range sdkSignatures {
-		regex, err := regexp.Compile(sig.Regex)
-		if err != nil {
-			m.logger("Error compiling regex: "+err.Error(), "Manager.AnalyseDetectSDKs")
-			continue
-		}
-		compiledSignatures = append(compiledSignatures, struct {
-			Signature SDKSignature
-			Regex     *regexp.Regexp
-		}{
-			Signature: sig,
-			Regex:     regex,
-		})
+	details := m.AnalyseDetectSDKDetails(classlist)
+	detectionMap := make(map[string][]string, len(details))
+	for name, detail := range details {
+		detectionMap[name] = detail.Classes
 	}
-
-	// Detect SDKs in class list using goroutines
-	type Detection struct {
-		SDKName   string
-		ClassName string
-		Detail    string
-		Website   string
-		Link      string
+	sdkNames := make([]string, 0, len(detectionMap))
+	for name := range detectionMap {
+		sdkNames = append(sdkNames, name)
 	}
-
-	// Set up worker pool and channels for concurrent processing, Limit number of workers to avoid overwhelming the system
-	numWorkers := 4
-	detectionsChan := make(chan Detection, numWorkers)
-	sigChan := make(chan struct {
-		Signature SDKSignature
-		Regex     *regexp.Regexp
-	}, len(compiledSignatures))
-
-	var wg sync.WaitGroup
-
-	// Start worker goroutines
-	for i := 0; i < numWorkers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for sig := range sigChan {
-				for _, className := range classlist {
-					if sig.Regex.MatchString(className) {
-						detectionsChan <- Detection{
-							SDKName:   sig.Signature.Name,
-							ClassName: className,
-							Detail:    sig.Signature.Detail,
-							Website:   sig.Signature.Website,
-							Link:      sig.Signature.Link,
-						}
-					}
-				}
-			}
-		}()
-	}
-
-	// Send signatures to workers
-	go func() {
-		for _, compSig := range compiledSignatures {
-			sigChan <- compSig
-		}
-		close(sigChan)
-	}()
-
-	// Close channel when workers finish
-	go func() {
-		wg.Wait()
-		close(detectionsChan)
-	}()
-
-	// Collect all detections
-	detectionMap := make(map[string][]string) // SDK name -> list of matching classes
-	for detection := range detectionsChan {
-		detectionMap[detection.SDKName] = append(detectionMap[detection.SDKName], detection.ClassName)
-	}
-
-	// Sort class names per SDK (optional for stable output)
-	for sdk := range detectionMap {
-		sort.Strings(detectionMap[sdk])
-	}
-
-	// Extract and sort unique SDK names
-	uniqueSDKs := make([]string, 0, len(detectionMap))
-	for sdk := range detectionMap {
-		uniqueSDKs = append(uniqueSDKs, sdk)
-	}
-	sort.Strings(uniqueSDKs)
-
-	// Print detected SDKs with all matches
+	sort.Strings(sdkNames)
 	fmt.Println("\n=== Detected SDKs in app ===")
-	for _, sdk := range uniqueSDKs {
-		fmt.Printf("- %s\n", sdk)
-		for _, className := range detectionMap[sdk] {
+	for _, name := range sdkNames {
+		fmt.Printf("- %s\n", name)
+		for _, className := range detectionMap[name] {
 			fmt.Printf("  └─ %s\n", className)
 		}
 	}
-
 	return detectionMap
+}
+
+// AnalyseDetectSDKDetails matches class evidence and retains descriptive
+// signature metadata for reports.
+func (m *Manager) AnalyseDetectSDKDetails(classlist []string) map[string]models.IosSDKDetail {
+	details := make(map[string]models.IosSDKDetail)
+	for _, signature := range m.LoadSDKSignatures() {
+		regex, err := regexp.Compile(signature.Regex)
+		if err != nil {
+			m.logger("Error compiling regex: "+err.Error(), "Manager.AnalyseDetectSDKDetails")
+			continue
+		}
+		var matchedClasses []string
+		for _, className := range classlist {
+			if regex.MatchString(className) {
+				matchedClasses = append(matchedClasses, className)
+			}
+		}
+		if len(matchedClasses) == 0 {
+			continue
+		}
+
+		detail, exists := details[signature.Name]
+		if !exists {
+			detail = models.IosSDKDetail{
+				ID:          signature.ID,
+				Regex:       signature.Regex,
+				DomainRegex: signature.DomainRegex,
+				Comment:     signature.Comment,
+				Detail:      signature.Detail,
+				Website:     signature.Website,
+				Link:        signature.Link,
+			}
+		}
+		detail.Classes = append(detail.Classes, matchedClasses...)
+		details[signature.Name] = detail
+	}
+
+	for name, detail := range details {
+		sort.Strings(detail.Classes)
+		details[name] = detail
+	}
+	return details
 }
 
 type trackerScanClass struct {
@@ -347,6 +299,7 @@ type AnalysisResult struct {
 	Classes          []string
 	Permissions      map[string]models.IosPermissionDetail
 	SDKs             map[string][]string
+	SDKDetails       map[string]models.IosSDKDetail
 	BundleInfo       map[string]any
 }
 
@@ -620,8 +573,7 @@ func (m *Manager) sshEnvironment(master bool, controlAction string) []string {
 	return env
 }
 
-// RunAppAnalysis installs the latest app when requested, runs trackerscan, and
-// optionally follows with the retained Frida analysis.
+// RunAppAnalysis installs the latest app when requested and runs trackerscan.
 func (m *Manager) RunAppAnalysis(ctx context.Context, options AnalysisOptions) (AnalysisResult, error) {
 	if m.helpers == nil {
 		return AnalysisResult{}, fmt.Errorf("iOS helper manager is not configured")
@@ -691,13 +643,6 @@ func (m *Manager) RunAppAnalysis(ctx context.Context, options AnalysisOptions) (
 		}
 	}
 
-	if !options.AnalyzeInstalledApp {
-		defer func() {
-			if err := m.Cleanup(); err != nil {
-				m.logger("Frida cleanup warning: "+err.Error(), "Manager.RunAppAnalysis")
-			}
-		}()
-	}
 	result := AnalysisResult{MinimumOSVersion: minimumOSVersion}
 	progress("trackerscan", "Running on-device trackerscan", 35)
 	m.logger("Starting on-device trackerscan for "+options.BundleID, "Manager.RunAppAnalysis")
@@ -724,22 +669,15 @@ func (m *Manager) RunAppAnalysis(ctx context.Context, options AnalysisOptions) (
 				result.Classes = append(result.Classes, class.Name)
 			}
 		}
-		result.SDKs = mergeSDKMaps(result.SDKs, m.detectTrackerSDKs(dump))
+		result.SDKDetails = m.detectTrackerSDKDetails(dump)
+		result.SDKs = make(map[string][]string, len(result.SDKDetails))
+		for name, detail := range result.SDKDetails {
+			result.SDKs[name] = detail.Classes
+		}
 		result.Permissions = mergePermissions(result.Permissions, m.enrichTrackerPermissions(dump.Permissions))
 		result.BundleInfo = mergeBundleInfo(result.BundleInfo, dump.BundleInfo)
 	}
-	if options.AnalyzeInstalledApp {
-		progress("analysis_complete", "On-device analysis complete", 75)
-		return result, nil
-	}
-	progress("frida", "Running Frida analysis", 45)
-	fridaPermissions, fridaSDKs, fridaBundleInfo, err := m.RunCompleteAnalysis(options.UDID, options.BundleID)
-	if err != nil {
-		return result, fmt.Errorf("Frida analysis failed: %w", err)
-	}
-	result.Permissions = mergePermissions(result.Permissions, fridaPermissions)
-	result.SDKs = mergeSDKMaps(result.SDKs, fridaSDKs)
-	result.BundleInfo = mergeBundleInfo(result.BundleInfo, fridaBundleInfo)
+	progress("analysis_complete", "On-device analysis complete", 75)
 	return result, nil
 }
 
@@ -987,7 +925,7 @@ func parseIconDataURI(uri string) ([]byte, string, error) {
 	return data, strings.TrimSuffix(metadata, ";base64"), nil
 }
 
-func (m *Manager) detectTrackerSDKs(dump TrackerScanDump) map[string][]string {
+func (m *Manager) detectTrackerSDKDetails(dump TrackerScanDump) map[string]models.IosSDKDetail {
 	evidence := make(map[string]struct{}, len(dump.Classes)+len(dump.FrameworkNames))
 	for _, class := range dump.Classes {
 		if class.Name != "" {
@@ -1004,7 +942,7 @@ func (m *Manager) detectTrackerSDKs(dump TrackerScanDump) map[string][]string {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	return m.AnalyseDetectSDKs(names)
+	return m.AnalyseDetectSDKDetails(names)
 }
 
 func (m *Manager) enrichTrackerPermissions(raw map[string]string) map[string]models.IosPermissionDetail {

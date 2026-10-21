@@ -16,9 +16,8 @@ AppMonitor's normal workflow is:
 4. Start analysis and review the generated report.
 
 For an iOS app that is already installed, choose whether to analyze that
-installed copy with `am_scanner` only, install the latest version, or cancel.
-Choosing the installed copy skips the Frida pass. Installing the latest version
-runs `am_scanner` followed by the retained Frida analysis. The `am_scanner`
+installed copy, install the latest version, or cancel. Both GUI analysis
+options use `am_scanner` only; Frida is not run by the GUI. The `am_scanner`
 package must already be installed on the iPhone. See the
 [iOS device setup](guides/ios-device-setup.md),
 [am_scanner setup](guides/am-scanner.md), and
@@ -42,9 +41,9 @@ refuse to launch or provide incomplete runtime evidence.
 ## Methodology
 
 AppMonitor combines static evidence and permission metadata to identify known
-SDKs and app capabilities. iOS analysis uses on-device `am_scanner` evidence;
-the optional Frida path performs additional runtime instrumentation. Android
-analysis uses its separate analysis workflow.
+SDKs and app capabilities. GUI iOS analysis uses on-device `am_scanner`
+evidence. The standalone CLI can optionally run additional Frida analysis with
+the `--frida` flag. Android analysis uses its separate analysis workflow.
 
 For detailed methodology, see *Monitoring infrastructural power:
 Methodological challenges in studying mobile infrastructures for

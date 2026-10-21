@@ -35,6 +35,18 @@ type AndroidSdkDetail struct {
 	Documentation []string `json:"documentation"`
 }
 
+// IosSDKDetail contains signature metadata and class evidence for a detected iOS SDK.
+type IosSDKDetail struct {
+	ID          int      `json:"id"`
+	Regex       string   `json:"regex,omitempty"`
+	DomainRegex string   `json:"domainRegex,omitempty"`
+	Comment     string   `json:"comment,omitempty"`
+	Detail      string   `json:"detail,omitempty"`
+	Website     string   `json:"website,omitempty"`
+	Link        string   `json:"link,omitempty"`
+	Classes     []string `json:"classes"`
+}
+
 // ExodusTrackerFile struct to represent the structure of the Exodus tracker data file. This allows for easy loading and access.
 type ExodusTrackerFile struct {
 	Trackers map[string]AndroidSdkDetail `json:"trackers"`

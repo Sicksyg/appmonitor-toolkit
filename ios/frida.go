@@ -2,7 +2,6 @@ package ios
 
 import (
 	"AppMonitor/models"
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -21,8 +20,6 @@ type FridaData struct {
 	pid     int
 	spawned bool
 }
-
-const safariBundleID = "com.apple.mobilesafari"
 
 // ResumeApp resumes a process suspended by Frida.
 func (m *Manager) ResumeApp() error {
@@ -483,73 +480,6 @@ func (m *Manager) Cleanup() error {
 	if len(errs) > 0 {
 		return fmt.Errorf("cleanup encountered %d error(s)", len(errs))
 	}
-	return nil
-}
-func (m *Manager) OpenAppInAppStore(udid string, appStoreURL string) error {
-	// Function to open the appstore on ios device using frida.
-	// "trackViewUrl": "https://apps.apple.com/dk/app/mobilbank-middelfartsparekasse/id1466762662?uo=4"
-	if strings.TrimSpace(udid) == "" {
-		m.logger("No device UDID supplied; FridaSetup requires an explicit UDID", "Manager.OpenAppInAppStore")
-		return fmt.Errorf("no device UDID supplied")
-	}
-
-	// Step 1: Setup Frida
-	if err := m.FridaSetup(udid, safariBundleID); err != nil {
-		m.logger("Frida setup failed: "+err.Error(), "Manager.OpenAppInAppStore")
-		return fmt.Errorf("frida setup: %w", err)
-	}
-	defer func() {
-		if err := m.Cleanup(); err != nil {
-			m.logger("Frida cleanup failed: "+err.Error(), "Manager.OpenAppInAppStore")
-		}
-	}()
-
-	// Frida spawns apps suspended. Resume Safari before loading the script and
-	// calling the RPC so UIApplication can execute the URL open request.
-	if err := m.ResumeApp(); err != nil {
-		m.logger("Safari resume failed: "+err.Error(), "Manager.OpenAppInAppStore")
-		return fmt.Errorf("resume Safari: %w", err)
-	}
-
-	comp := frida.NewCompiler()
-	comp.On("diagnostics", func(diag string) {
-		m.logger("Compiler diagnostics: "+diag, "Manager.OpenAppInAppStore")
-	})
-
-	bopts := frida.NewCompilerOptions()
-	bopts.SetProjectRoot(m.fridaRoot)
-	bopts.SetSourceMaps(frida.SourceMapsOmitted)
-	bopts.SetJSCompression(frida.JSCompressionTerser)
-
-	compiledScript, err := comp.Build("frida_open_appstore.js", bopts)
-	if err != nil {
-		m.logger("Error compiling script: "+err.Error(), "Manager.OpenAppInAppStore")
-		return fmt.Errorf("compile App Store script: %w", err)
-	}
-
-	// Create and load the script before invoking its RPC exports.
-	fridaScript, err := m.fridaData.session.CreateScript(compiledScript)
-	if err != nil {
-		m.logger("Error creating App Store script: "+err.Error(), "Manager.OpenAppInAppStore")
-		return fmt.Errorf("create App Store script: %w", err)
-	}
-	defer fridaScript.Clean()
-
-	if err := fridaScript.Load(); err != nil {
-		m.logger("Error loading App Store script: "+err.Error(), "Manager.OpenAppInAppStore")
-		return fmt.Errorf("load App Store script: %w", err)
-	}
-
-	rpcContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	activation := fridaScript.ExportsCallWithContext(rpcContext, "openurl", appStoreURL)
-	opened, ok := activation.(bool)
-	if !ok || !opened {
-		m.logger(fmt.Sprintf("App Store RPC failed: %v", activation), "Manager.OpenAppInAppStore")
-		return fmt.Errorf("App Store RPC did not open URL")
-	}
-
-	m.logger(fmt.Sprintf("App Store RPC result: %v", activation), "Manager.OpenAppInAppStore")
 	return nil
 }
 

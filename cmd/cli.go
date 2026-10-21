@@ -128,11 +128,10 @@ func main() {
 	fmt.Println("             AppMonitor CLI Runner                ")
 	fmt.Println("==================================================")
 
-	runner, err := initCLIRunner(configPathFlag, outputPathFlag, udidFlag, strings.ToLower(platformFlag), manualDownloadFlag, uninstallAfterFlag, !isAuto)
+	runner, err := initCLIRunner(configPathFlag, outputPathFlag, udidFlag, strings.ToLower(platformFlag), manualDownloadFlag, uninstallAfterFlag, fridaFlag, !isAuto)
 	if err != nil {
 		log.Fatalf("❌ Failed to initialize CLI runner: %v", err)
 	}
-	runner.fridaEnabled = fridaFlag
 	if runner.iosMgr != nil {
 		defer runner.iosMgr.StopSSH()
 	}
@@ -186,13 +185,14 @@ func main() {
 }
 
 // initCLIRunner initializes workspace, tools, and managers using the same logic as App.startup
-func initCLIRunner(customConfigPath, customOutputPath, udidOverride, platform string, manualDownload, uninstallAfter, interactive bool) (*CLIRunner, error) {
+func initCLIRunner(customConfigPath, customOutputPath, udidOverride, platform string, manualDownload, uninstallAfter, fridaEnabled, interactive bool) (*CLIRunner, error) {
 	ctx := context.Background()
 	runner := &CLIRunner{
 		ctx:            ctx,
 		platform:       platform,
 		manualDownload: manualDownload,
 		uninstallAfter: uninstallAfter,
+		fridaEnabled:   fridaEnabled,
 		interactive:    interactive,
 		scanner:        bufio.NewScanner(os.Stdin),
 		udid:           udidOverride,
@@ -215,10 +215,12 @@ func initCLIRunner(customConfigPath, customOutputPath, udidOverride, platform st
 	runner.toolPaths = toolPaths
 	runner.libDir = libDir
 
-	// Prepare Frida project
-	projectRoot, err := tools.EnsureFridaProject("AppMonitor")
-	if err != nil {
-		log.Printf("⚠️  Warning preparing Frida project: %v", err)
+	var projectRoot string
+	if runner.fridaEnabled && runner.platform == "ios" {
+		projectRoot, err = tools.EnsureFridaProject("AppMonitor")
+		if err != nil {
+			return nil, fmt.Errorf("prepare Frida project: %w", err)
+		}
 	}
 
 	// Initialize managers

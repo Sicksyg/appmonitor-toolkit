@@ -95,12 +95,6 @@ func (a *App) startup(ctx context.Context) {
 	}
 	a.Log(fmt.Sprintf("Resolved tool paths - ipatool=%s idevice_id=%s ideviceinfo=%s ideviceinstaller=%s ldid=%s iproxy=%s", toolPaths.IPATool, toolPaths.IDeviceID, toolPaths.IDeviceInfo, toolPaths.IDeviceInstaller, toolPaths.LDID, toolPaths.IProxy), "App.startup")
 
-	// Ensure the Frida project is set up by calling EnsureFridaProject, which will create the project if it doesn't exist
-	projectRoot, err := tools.EnsureFridaProject("AppMonitor")
-	if err != nil {
-		a.Log("Error preparing frida project: "+err.Error(), "App.startup")
-		return
-	}
 	// Initialize helpers manager with the appropriate paths
 	a.helpersMgr = helpers.NewManager(a.Log, ctx, toolPaths, helpers.Paths{
 		TempPath: a.tmpPath,
@@ -109,7 +103,6 @@ func (a *App) startup(ctx context.Context) {
 
 	// Initialize iOS manager with the appropriate paths
 	a.iosMgr = ios.NewManager(a.Log, ios.Paths{
-		FridaRoot:          projectRoot,
 		ClassLogPath:       a.iosClassLogPath,
 		Helpers:            a.helpersMgr,
 		SSHScriptPath:      a.iosSSHScript,
@@ -563,17 +556,20 @@ func (a *App) StartIosAnalysis() {
 	if version, ok := result.BundleInfo["shortVersion"].(string); ok {
 		a.appinfo.Version = version
 	}
+	a.appinfo.AnalysisDate = time.Now().UTC().Format(time.RFC3339)
 
 	a.emitStatus("report", "Generating report", 85)
 	reportPath := filepath.Join(a.iosReportPath, fmt.Sprintf("%s_%d_report.pdf", a.appinfo.BundleID, time.Now().Unix()))
 	reportInput := report.Input{
 		ApplicationName:     a.appinfo.Name,
 		ApplicationBundleID: a.appinfo.BundleID,
+		AnalysisDate:        a.appinfo.AnalysisDate,
 		AppStoreDescription: a.appinfo.Description,
 		AppStoreIconPath:    a.appinfo.AppStoreIconPath,
 		AppStoreURL:         a.appinfo.AppStoreURL,
 		OutPath:             reportPath,
 		SDKMap:              a.appinfo.SDKs,
+		SDKDetails:          result.SDKDetails,
 		Permissions:         report.IosPermissionItems(a.appinfo.IosPermissions),
 	}
 
@@ -616,19 +612,16 @@ func (a *App) StartAndroidAnalysis() {
 	for _, sdk := range sdks {
 		a.appinfo.SDKs["Android"] = append(a.appinfo.SDKs["Android"], sdk.Name)
 	}
+	a.appinfo.AnalysisDate = time.Now().UTC().Format(time.RFC3339)
 
 	time.Sleep(time.Second * 2)
-
-	if err := a.iosMgr.Cleanup(); err != nil {
-		a.emitStatus("cleanup", "Cleanup warning: "+err.Error(), 75)
-		a.Log("Warning: Error during frida cleanup: "+err.Error(), "App.StartAnalysis")
-	}
 
 	a.emitStatus("report", "Generating report", 85)
 	reportPath := filepath.Join(a.androidReportPath, fmt.Sprintf("%s_%d_report.pdf", a.appinfo.BundleID, time.Now().Unix()))
 	reportInput := report.Input{
 		ApplicationName:     a.appinfo.Name,
 		ApplicationBundleID: a.appinfo.BundleID,
+		AnalysisDate:        a.appinfo.AnalysisDate,
 		AppStoreDescription: a.appinfo.Description,
 		AppStoreIconPath:    a.appinfo.AppStoreIconPath,
 		AppStoreURL:         a.appinfo.AppStoreURL,
@@ -929,7 +922,6 @@ func (a *App) ClearTmpDir() {
 }
 
 func (a *App) OpenAppInAppStore() {
-	// This function opens the app's App Store URL on the device using Frida.
 	if a.appinfo.AppStoreURL == "" {
 		a.Log("No App Store URL available for the selected app", "App.OpenAppInAppStore")
 		return
@@ -942,7 +934,7 @@ func (a *App) OpenAppInAppStore() {
 		return
 	}
 	a.Log("Opening app in App Store: "+a.appinfo.AppStoreURL, "App.OpenAppInAppStore")
-	if err := a.iosMgr.OpenAppInAppStore(a.appinfo.UDID, a.appinfo.AppStoreURL); err != nil {
+	if err := a.iosMgr.OpenURL(a.ctx, a.appinfo.AppStoreURL); err != nil {
 		a.Log("Unable to open app in App Store: "+err.Error(), "App.OpenAppInAppStore")
 	}
 }
@@ -965,7 +957,9 @@ func (a *App) CreateAndPushToDatabase() {
 		return
 	}
 
-	a.appinfo.AnalysisDate = time.Now().UTC().Format(time.RFC3339)
+	if a.appinfo.AnalysisDate == "" {
+		a.appinfo.AnalysisDate = time.Now().UTC().Format(time.RFC3339)
+	}
 	database.AddAnalysis(a.appinfo)
 
 	// Save updated database to disk

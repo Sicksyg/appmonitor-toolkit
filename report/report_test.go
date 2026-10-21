@@ -1,14 +1,16 @@
 package report
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"AppMonitor/ios"
 	"AppMonitor/models"
 )
 
-func TestMakeMarotoReport_WithMockData_WritesPDF(t *testing.T) {
+func TestMakeMarotoReport_WritesPDFWithSDKMetadataAndLongDescription(t *testing.T) {
 	t.Helper()
 
 	var appStoreDescription string = `I Min Læge-appen kan du nemt kontakte din praktiserende læge på både dine egne og dine børns vegne, og du får adgang til sundhedsdata registreret om dig og dine børn.
@@ -40,23 +42,17 @@ func TestMakeMarotoReport_WithMockData_WritesPDF(t *testing.T) {
 	SE DINE PRØVESVAR
 	I Min Læge-appen er det også muligt at se dine prøvesvar på et stort udvalg af prøver – fx blodprøver.`
 
-	sdkMap := map[string][]string{
-		"Firebase Analytics": {
-			"FIRAnalytics",
-			"FIRInstallations",
-		},
-		"Adjust": {
-			"ADJActivityHandler",
-			"ADJSessionParameters",
-		},
-		"Facebook SDK": {
-			"FBSDKCoreKit",
-			"FBSDKLoginKit",
-		},
-		"Google Maps SDK": {
-			"GMSServices",
-			"GMSMapView",
-		},
+	signatureManager := ios.NewManager(func(string, string) {}, ios.Paths{})
+	sdkDetails := signatureManager.AnalyseDetectSDKDetails([]string{
+		"FBSDKApplicationDelegate",
+		"FBSDKCoreKit",
+	})
+	sdkMap := make(map[string][]string, len(sdkDetails))
+	for sdkName, detail := range sdkDetails {
+		sdkMap[sdkName] = detail.Classes
+	}
+	if _, ok := sdkMap["Facebook"]; !ok {
+		t.Fatalf("expected the current iOS signatures to detect Facebook, got %v", sdkMap)
 	}
 
 	permissionMap := map[string]models.IosPermissionDetail{
@@ -90,23 +86,20 @@ func TestMakeMarotoReport_WithMockData_WritesPDF(t *testing.T) {
 		},
 	}
 
-	outDir := filepath.Join("..", "tmp", "report_test_output")
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		t.Fatalf("create output dir: %v", err)
-	}
-
-	outPath := filepath.Join(outDir, "mock_analysis_report.pdf")
-	rm := NewManager(func(_, _ string) {}, Paths{ReportPath: outDir})
+	outPath := filepath.Join(t.TempDir(), "analysis_report.pdf")
+	rm := NewManager(func(_, _ string) {}, Paths{ReportPath: filepath.Dir(outPath)})
 	permissions := IosPermissionItems(permissionMap)
 
 	if err := rm.MakeMarotoReport(Input{
 		ApplicationName:     "Mock App",
 		ApplicationBundleID: "com.example.mockapp",
+		AnalysisDate:        "2026-10-21T06:45:00Z",
 		AppStoreDescription: appStoreDescription,
 		AppStoreIconPath:    "",
 		AppStoreURL:         "https://example.com/app",
 		OutPath:             outPath,
 		SDKMap:              sdkMap,
+		SDKDetails:          sdkDetails,
 		Permissions:         permissions,
 	}); err != nil {
 		t.Fatalf("MakeMarotoReport failed: %v", err)
@@ -124,6 +117,36 @@ func TestMakeMarotoReport_WithMockData_WritesPDF(t *testing.T) {
 	if len(content) < 4 || string(content[:4]) != "%PDF" {
 		t.Fatalf("generated file is not a PDF: %s", outPath)
 	}
+	for _, text := range []string{
+		"ANALYSIS TIME",
+		"21 Oct 2026, 06:45:00 UTC",
+		"SDK analysis",
+		"MATCHING CLASSES",
+		"Class signature",
+		"FBSDK",
+		"Signature ID",
+		"iOS SDK",
+		"Owned by Meta Platforms.",
+		"https://www.meta.com/",
+		"https://github.com/facebook/facebook-ios-sdk",
+		"FBSDKApplicationDelegate",
+		"FBSDKCoreKit",
+	} {
+		if !bytes.Contains(content, []byte(text)) {
+			t.Errorf("generated PDF does not contain report text %q", text)
+		}
+	}
+	if bytes.Contains(content, []byte("FBSDKApplicationDelegate, FBSDKCoreKit")) {
+		t.Error("class evidence was rendered as a comma-separated paragraph, not a list")
+	}
 
-	t.Logf("Mock report generated: %s", outPath)
+}
+
+func TestFormatAnalysisDate(t *testing.T) {
+	if got := formatAnalysisDate("2026-10-21T09:45:00+03:00"); got != "21 Oct 2026, 06:45:00 UTC" {
+		t.Fatalf("formatAnalysisDate() = %q, want UTC-normalized date", got)
+	}
+	if got := formatAnalysisDate("unknown"); got != "unknown" {
+		t.Fatalf("formatAnalysisDate() = %q, want unparsed value unchanged", got)
+	}
 }
