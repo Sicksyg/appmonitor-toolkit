@@ -79,9 +79,13 @@ func (rm *Manager) MakeMarotoReport(input Input) error {
 	// Create config
 	cfg := config.NewBuilder().
 		WithDimensions(210, 297).
-		WithLeftMargin(20).
-		WithTopMargin(15).
-		WithRightMargin(20).
+		WithLeftMargin(22).
+		WithTopMargin(16).
+		WithRightMargin(22).
+		WithBottomMargin(18).
+		WithCustomFonts(reportFonts()).
+		WithDefaultFont(&props.Font{Family: fontSans, Style: fontstyle.Normal, Size: 11, Color: &darkCharcoal}).
+		WithPageNumber(props.PageNumber{Pattern: "Page {current} of {total}", Place: props.RightBottom, Size: 9, Color: &mediumGray}).
 		Build()
 
 	// Create maroto
@@ -120,6 +124,7 @@ var (
 	mediumGray       = props.Color{Red: 89, Green: 101, Blue: 112}
 	veryLightGray    = props.Color{Red: 244, Green: 247, Blue: 249}
 	professionalBlue = props.Color{Red: 36, Green: 73, Blue: 108}
+	paleBlue         = props.Color{Red: 224, Green: 232, Blue: 241}
 	slateBlue        = props.Color{Red: 79, Green: 111, Blue: 139}
 	charcoalDivider  = props.Color{Red: 190, Green: 201, Blue: 210}
 	panelOffWhite    = props.Color{Red: 249, Green: 250, Blue: 251}
@@ -219,6 +224,44 @@ func wrapTextLong(text string, maxCharsPerLine int, maxLength int) string {
 	return result.String()
 }
 
+// hardWrap breaks text at a fixed rune count; used for unbroken strings such as class names and regexes.
+func hardWrap(text string, width int) string {
+	runes := []rune(text)
+	if width <= 0 || len(runes) <= width {
+		return text
+	}
+	var b strings.Builder
+	for i := 0; i < len(runes); i += width {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		end := i + width
+		if end > len(runes) {
+			end = len(runes)
+		}
+		b.WriteString(string(runes[i:end]))
+	}
+	return b.String()
+}
+
+// multiLine renders pre-wrapped text as one text component per line. Maroto does not honour
+// "\n" inside a string, so each line is placed explicitly.
+func multiLine(value string, base props.Text) []core.Component {
+	lineHeight := base.Size
+	if lineHeight == 0 {
+		lineHeight = 9
+	}
+	lineHeight *= 0.48
+	parts := strings.Split(value, "\n")
+	components := make([]core.Component, 0, len(parts))
+	for i, part := range parts {
+		lineProps := base
+		lineProps.Top = base.Top + float64(i)*lineHeight
+		components = append(components, text.New(part, lineProps))
+	}
+	return components
+}
+
 func dynamicRowHeight(wrappedText string, minHeight int, perLine int) float64 {
 	lineCount := 1
 	trimmed := strings.TrimSpace(wrappedText)
@@ -289,27 +332,32 @@ func AndroidPermissionItems(permissionMap map[string]models.AndroidPermissionDet
 // buildHeader registers a consistent header for each page with the application name and report title
 func (rm *Manager) buildHeader(m core.Maroto, applicationName string, bundleID string, sdkCount int) {
 	if err := m.RegisterHeader(
-		row.New(14).Add(
+		row.New(16).Add(
 			col.New(12).Add(
 				text.New(fmt.Sprintf("AppMonitor Analysis Report: %s", applicationName), props.Text{
-					Top:   5,
-					Size:  14,
-					Style: fontstyle.Bold,
-					Left:  2,
-					Color: &props.WhiteColor,
+					Top:    5.5,
+					Size:   15,
+					Family: fontSerif,
+					Style:  fontstyle.Bold,
+					Left:   4,
+					Color:  &props.WhiteColor,
 				}),
 			),
 		).WithStyle(&props.Cell{BackgroundColor: &professionalBlue}),
-		row.New(7).Add(
+		row.New(9).Add(
 			col.New(6).Add(
 				text.New(fmt.Sprintf("%d SDKs detected", sdkCount), props.Text{
-					Size:  8,
+					Top:   2.5,
+					Left:  4,
+					Size:  10,
 					Color: &mediumGray,
 				}),
 			),
 			col.New(6).Add(
 				text.New(fmt.Sprintf("Bundle ID: %s", bundleID), props.Text{
-					Size:  8,
+					Top:   2.5,
+					Right: 4,
+					Size:  10,
 					Align: align.Right,
 					Color: &mediumGray,
 				}),
@@ -325,7 +373,7 @@ func (rm *Manager) buildFrontPage(m core.Maroto, applicationName, bundleID, anal
 	iconCol := col.New(3).Add(
 		text.New("No icon", props.Text{
 			Top:   16,
-			Size:  9,
+			Size:  11,
 			Align: align.Center,
 			Color: &mediumGray,
 		}),
@@ -333,87 +381,105 @@ func (rm *Manager) buildFrontPage(m core.Maroto, applicationName, bundleID, anal
 	if strings.TrimSpace(appStoreIconPath) != "" {
 		iconCol = image.NewFromFileCol(3, appStoreIconPath, props.Rect{
 			Center:  true,
-			Percent: 80,
+			Percent: 72,
 		})
 	}
 
+	// Long names wrap onto at most two lines; the description starts below however many were used.
+	const nameSize = 22.0
+	nameLines := multiLine(wrapTextLong(applicationName, 28, 56), props.Text{
+		Top:    8,
+		Size:   nameSize,
+		Family: fontSerif,
+		Left:   2,
+		Style:  fontstyle.Bold,
+		Color:  &darkCharcoal,
+	})
+	descriptionTop := 8 + float64(len(nameLines))*nameSize*0.48 + 3
+
 	// Icon left and text about the app on the right
 	m.AddRows(
-		row.New(48).Add(
+		row.New(70).Add(
 			iconCol,
-			col.New(9).Add(
-				text.New(applicationName, props.Text{
-					Top:   6,
-					Size:  20,
-					Style: fontstyle.Bold,
-					Color: &darkCharcoal,
-				}),
-				text.New(wrapTextLong(appStoreDescription, 70, 360), props.Text{
-					Top:   17,
-					Size:  9,
-					Color: &mediumGray,
-				}),
-			),
+			col.New(9).Add(append(nameLines, multiLine(wrapTextLong(appStoreDescription, 54, 300), props.Text{
+				Top:   descriptionTop,
+				Left:  2,
+				Right: 4,
+				Size:  11,
+				Color: &mediumGray,
+			})...)...),
 		).WithStyle(&props.Cell{BackgroundColor: &panelOffWhite}),
 
-		row.New(9).Add(
+		row.New(10).Add(
 			col.New(7).Add(
 				text.New(appStoreURL, props.Text{
-					Size:      8,
-					Left:      3,
+					Top:       2.5,
+					Size:      10,
+					Left:      4,
 					Color:     &linkBlue,
 					Hyperlink: &appStoreURL,
 				}),
 			),
 			col.New(5).Add(
 				text.New(bundleID, props.Text{
-					Size:  8,
+					Top:   2.5,
+					Right: 4,
+					Size:  10,
 					Align: align.Right,
 					Color: &mediumGray,
 				}),
 			),
 		).WithStyle(&props.Cell{BackgroundColor: &panelOffWhite}),
-		row.New(8).Add(
+		row.New(10).Add(
 			col.New(12).Add(
 				text.New("ANALYSIS TIME  "+formatAnalysisDate(analysisDate), props.Text{
-					Size:  8,
+					Top:   1.5,
+					Size:  10,
 					Style: fontstyle.Bold,
-					Left:  3,
+					Left:  4,
 					Color: &professionalBlue,
 				}),
 			),
 		).WithStyle(&props.Cell{BackgroundColor: &panelOffWhite}),
 
-		row.New(7),
+		row.New(10),
 	)
 	m.AddRows(
-		row.New(17).Add(
+		row.New(22).Add(
 			col.New(6).Add(
 				text.New(fmt.Sprintf("%d", len(sdkMap)), props.Text{
-					Size:  18,
-					Style: fontstyle.Bold,
-					Color: &professionalBlue,
+					Top:    3,
+					Left:   4,
+					Size:   22,
+					Family: fontSerif,
+					Style:  fontstyle.Bold,
+					Color:  &professionalBlue,
 				}),
 				text.New("Detected SDKs", props.Text{
-					Top:   6,
-					Size:  8,
+					Top:   12.5,
+					Left:  4,
+					Size:  10,
 					Color: &mediumGray,
 				}),
 			),
 			col.New(6).Add(
 				text.New(fmt.Sprintf("%d", len(permissions)), props.Text{
-					Size:  18,
-					Style: fontstyle.Bold,
-					Color: &professionalBlue,
+					Top:    3,
+					Left:   4,
+					Size:   22,
+					Family: fontSerif,
+					Style:  fontstyle.Bold,
+					Color:  &professionalBlue,
 				}),
 				text.New("Declared permissions", props.Text{
-					Top:   6,
-					Size:  8,
+					Top:   12.5,
+					Left:  4,
+					Size:  10,
 					Color: &mediumGray,
 				}),
 			),
 		).WithStyle(&props.Cell{BackgroundColor: &veryLightGray}),
-		row.New(6),
+		row.New(10),
 	)
 
 	sdkNames := make([]string, 0, len(sdkMap))
@@ -437,22 +503,23 @@ func (rm *Manager) buildFrontPage(m core.Maroto, applicationName, bundleID, anal
 		maxRows = len(permissionNames)
 	}
 
-	m.AddRow(8,
+	m.AddRow(9,
 		col.New(6).Add(
-			text.New("DETECTED SDKs", props.Text{Size: 9, Style: fontstyle.Bold, Color: &professionalBlue}),
+			text.New("DETECTED SDKs", props.Text{Top: 1.5, Left: 4, Size: 11, Style: fontstyle.Bold, Color: &professionalBlue}),
 		),
 		col.New(6).Add(
-			text.New("DECLARED PERMISSIONS", props.Text{Size: 9, Style: fontstyle.Bold, Color: &professionalBlue}),
+			text.New("DECLARED PERMISSIONS", props.Text{Top: 1.5, Left: 4, Size: 11, Style: fontstyle.Bold, Color: &professionalBlue}),
 		),
 	)
+	m.AddRow(1).WithStyle(&props.Cell{BackgroundColor: &charcoalDivider})
 
 	if maxRows == 0 {
 		m.AddRow(8,
 			col.New(6).Add(
-				text.New("None", props.Text{Size: 9, Color: &mediumGray}),
+				text.New("None", props.Text{Top: 2, Left: 4, Size: 11, Color: &mediumGray}),
 			),
 			col.New(6).Add(
-				text.New("None", props.Text{Size: 9, Color: &mediumGray}),
+				text.New("None", props.Text{Top: 2, Left: 4, Size: 11, Color: &mediumGray}),
 			),
 		)
 		return
@@ -470,14 +537,18 @@ func (rm *Manager) buildFrontPage(m core.Maroto, applicationName, bundleID, anal
 			permissionText = fmt.Sprintf("• %s", permissionNames[i])
 		}
 
-		m.AddRow(7,
+		rowStyle := &props.Cell{BackgroundColor: &props.WhiteColor}
+		if i%2 == 0 {
+			rowStyle = &props.Cell{BackgroundColor: &veryLightGray}
+		}
+		m.AddRow(8,
 			col.New(6).Add(
-				text.New(sdkText, props.Text{Size: 9, Color: &mediumGray}),
+				text.New(sdkText, props.Text{Top: 2, Left: 4, Size: 11, Color: &darkCharcoal}),
 			),
 			col.New(6).Add(
-				text.New(permissionText, props.Text{Size: 9, Color: &mediumGray}),
+				text.New(permissionText, props.Text{Top: 2, Left: 4, Size: 11, Color: &darkCharcoal}),
 			),
-		).WithStyle(&props.Cell{BackgroundColor: &veryLightGray})
+		).WithStyle(rowStyle)
 	}
 }
 
@@ -487,9 +558,10 @@ func (rm *Manager) buildSDKSection(m core.Maroto, sdkMap map[string][]string, sd
 		m.AddRow(15,
 			col.New(12).Add(
 				text.New("No SDKs detected", props.Text{
-					Size:  12,
-					Align: align.Center,
-					Color: &mediumGray,
+					Size:   14,
+					Family: fontSerif,
+					Align:  align.Center,
+					Color:  &mediumGray,
 				}),
 			),
 		)
@@ -504,26 +576,29 @@ func (rm *Manager) buildSDKSection(m core.Maroto, sdkMap map[string][]string, sd
 	for _, sdkname := range sdkNames {
 		detail := sdkDetails[sdkname]
 		m.AddRows(
-			row.New(9).Add(
+			row.New(11).Add(
 				col.New(9).Add(
 					text.New(sdkname, props.Text{
-						Size:  12,
-						Style: fontstyle.Bold,
-						Left:  3,
-						Color: &props.WhiteColor,
+						Top:    2.5,
+						Size:   14,
+						Family: fontSerif,
+						Style:  fontstyle.Bold,
+						Left:   4,
+						Color:  &professionalBlue,
 					}),
 				),
 				col.New(3).Add(
 					text.New(fmt.Sprintf("%d classes", len(sdkMap[sdkname])), props.Text{
-						Size:  8,
+						Top:   3.5,
+						Size:  10,
 						Align: align.Right,
-						Right: 3,
-						Color: &props.WhiteColor,
+						Right: 4,
+						Color: &mediumGray,
 					}),
 				),
-			).WithStyle(&props.Cell{BackgroundColor: &professionalBlue}),
-			row.New(2).WithStyle(&props.Cell{BackgroundColor: &slateBlue}),
-			row.New(2),
+			).WithStyle(&props.Cell{BackgroundColor: &paleBlue}),
+			row.New(0.8).WithStyle(&props.Cell{BackgroundColor: &professionalBlue}),
+			row.New(3),
 		)
 
 		rm.addSDKMetadata(m, "Description", detail.Comment)
@@ -536,23 +611,26 @@ func (rm *Manager) buildSDKSection(m core.Maroto, sdkMap map[string][]string, sd
 			rm.addSDKMetadata(m, "Signature ID", fmt.Sprintf("%d", detail.ID))
 		}
 
-		m.AddRow(6,
+		m.AddRow(3)
+		m.AddRow(9,
 			col.New(12).Add(
 				text.New("MATCHING CLASSES", props.Text{
-					Size:  8,
+					Top:   3,
+					Size:  10,
 					Style: fontstyle.Bold,
-					Left:  3,
+					Left:  4,
 					Color: &slateBlue,
 				}),
 			),
 		)
 		for i, className := range sdkMap[sdkname] {
-			classRow := row.New(6).Add(
+			wrappedClass := hardWrap(className, 64)
+			classRow := row.New(dynamicRowHeight(wrappedClass, 8, 5)).Add(
 				col.New(1).Add(
-					text.New("•", props.Text{Size: 9, Style: fontstyle.Bold, Align: align.Right, Color: &professionalBlue}),
+					text.New("•", props.Text{Top: 1.5, Size: 11, Style: fontstyle.Bold, Align: align.Right, Right: 1, Color: &professionalBlue}),
 				),
 				col.New(11).Add(
-					text.New(className, props.Text{Size: 9, Color: &darkCharcoal}),
+					multiLine(wrappedClass, props.Text{Top: 1.5, Left: 1, Family: fontMono, Size: 10, Color: &darkCharcoal})...,
 				),
 			)
 			if i%2 == 0 {
@@ -560,29 +638,30 @@ func (rm *Manager) buildSDKSection(m core.Maroto, sdkMap map[string][]string, sd
 			}
 			m.AddRows(classRow)
 		}
-		m.AddRow(6)
+		m.AddRow(12)
 	}
 }
 
 func (rm *Manager) addSectionTitle(m core.Maroto, title, subtitle string) {
 	m.AddRows(
-		row.New(5),
-		row.New(17).Add(
+		row.New(6),
+		row.New(19).Add(
 			col.New(12).Add(
 				text.New(title, props.Text{
-					Size:  15,
-					Style: fontstyle.Bold,
-					Color: &professionalBlue,
+					Size:   19,
+					Family: fontSerif,
+					Style:  fontstyle.Bold,
+					Color:  &professionalBlue,
 				}),
 				text.New(subtitle, props.Text{
-					Top:   7,
-					Size:  8,
+					Top:   8.5,
+					Size:  10,
 					Color: &mediumGray,
 				}),
 			),
 		),
 		row.New(1).WithStyle(&props.Cell{BackgroundColor: &slateBlue}),
-		row.New(3),
+		row.New(5),
 	)
 }
 
@@ -590,18 +669,25 @@ func (rm *Manager) addSDKMetadata(m core.Maroto, label, value string) {
 	if strings.TrimSpace(value) == "" {
 		return
 	}
-	wrapped := wrapText(value, 78)
-	m.AddRow(dynamicRowHeight(wrapped, 6, 4),
-		col.New(2).Add(
+	valueProps := props.Text{Top: 1.5, Size: 11, Color: &darkCharcoal}
+	wrapped := wrapText(value, 54)
+	if strings.Contains(strings.ToLower(label), "signature") {
+		wrapped = hardWrap(value, 52)
+		valueProps.Family = fontMono
+		valueProps.Size = 10
+	}
+	m.AddRow(dynamicRowHeight(wrapped, 8, 6)+3,
+		col.New(3).Add(
 			text.New(label, props.Text{
-				Size:  7,
+				Top:   2,
+				Size:  9,
 				Style: fontstyle.Bold,
-				Left:  3,
+				Left:  4,
 				Color: &slateBlue,
 			}),
 		),
-		col.New(10).Add(
-			text.New(wrapped, props.Text{Size: 8, Color: &darkCharcoal}),
+		col.New(9).Add(
+			multiLine(wrapped, valueProps)...,
 		),
 	).WithStyle(&props.Cell{BackgroundColor: &panelOffWhite})
 }
@@ -618,25 +704,27 @@ func (rm *Manager) addSDKLink(m core.Maroto, label, value string) {
 	if strings.Contains(value, ",") {
 		hyperlink = ""
 	}
-	wrapped := wrapText(value, 78)
+	wrapped := wrapText(value, 54)
 	linkText := props.Text{
-		Size:  8,
+		Top:   1.5,
+		Size:  10,
 		Color: &linkBlue,
 	}
 	if hyperlink != "" {
 		linkText.Hyperlink = &hyperlink
 	}
-	m.AddRow(dynamicRowHeight(wrapped, 6, 4),
-		col.New(2).Add(
+	m.AddRow(dynamicRowHeight(wrapped, 8, 6)+3,
+		col.New(3).Add(
 			text.New(label, props.Text{
-				Size:  7,
+				Top:   2,
+				Size:  9,
 				Style: fontstyle.Bold,
-				Left:  3,
+				Left:  4,
 				Color: &slateBlue,
 			}),
 		),
-		col.New(10).Add(
-			text.New(wrapped, linkText),
+		col.New(9).Add(
+			multiLine(wrapped, linkText)...,
 		),
 	).WithStyle(&props.Cell{BackgroundColor: &panelOffWhite})
 }
@@ -656,9 +744,10 @@ func (rm *Manager) buildPermissionsSection(m core.Maroto, permissions []Permissi
 		m.AddRow(15,
 			col.New(12).Add(
 				text.New("No permissions detected", props.Text{
-					Size:  12,
-					Align: align.Center,
-					Color: &mediumGray,
+					Size:   14,
+					Family: fontSerif,
+					Align:  align.Center,
+					Color:  &mediumGray,
 				}),
 			),
 		)
@@ -675,16 +764,18 @@ func (rm *Manager) buildPermissionsSection(m core.Maroto, permissions []Permissi
 		if title == "" {
 			title = strings.TrimSpace(permission.Key)
 		}
-		wrappedTitle := wrapText(fmt.Sprintf(" %s", title), 80)
+		wrappedTitle := wrapText(fmt.Sprintf(" %s", title), 60)
 
-		m.AddRow(dynamicRowHeight(wrappedTitle, 8, 5),
+		m.AddRow(dynamicRowHeight(wrappedTitle, 10, 6)+3,
 			col.New(12).Add(
-				text.New(wrappedTitle, props.Text{
-					Size:  11,
-					Style: fontstyle.Bold,
-					Color: &professionalBlue,
-					Left:  3,
-				}),
+				multiLine(wrappedTitle, props.Text{
+					Top:    2.5,
+					Size:   13,
+					Family: fontSerif,
+					Style:  fontstyle.Bold,
+					Color:  &professionalBlue,
+					Left:   4,
+				})...,
 			),
 		).WithStyle(&props.Cell{BackgroundColor: bgColor})
 
@@ -693,66 +784,71 @@ func (rm *Manager) buildPermissionsSection(m core.Maroto, permissions []Permissi
 			if label == "" {
 				label = "System"
 			}
-			systemText := wrapText(fmt.Sprintf("%s: %s", label, permission.SystemDescription), 100)
-			m.AddRow(dynamicRowHeight(systemText, 6, 4),
+			systemText := wrapText(fmt.Sprintf("%s: %s", label, permission.SystemDescription), 76)
+			m.AddRow(dynamicRowHeight(systemText, 8, 6)+2,
 				col.New(12).Add(
-					text.New(systemText, props.Text{
-						Size:  9,
-						Left:  5,
+					multiLine(systemText, props.Text{
+						Top:   1,
+						Size:  11,
+						Left:  6,
 						Color: &darkCharcoal,
-					}),
+					})...,
 				),
 			)
 		}
 
 		if permission.DeveloperDescription != "" {
-			developerText := wrapText(fmt.Sprintf("Developer: %s", permission.DeveloperDescription), 100)
-			m.AddRow(dynamicRowHeight(developerText, 6, 4),
+			developerText := wrapText(fmt.Sprintf("Developer: %s", permission.DeveloperDescription), 76)
+			m.AddRow(dynamicRowHeight(developerText, 8, 6)+2,
 				col.New(12).Add(
-					text.New(developerText, props.Text{
-						Size:  9,
-						Left:  5,
+					multiLine(developerText, props.Text{
+						Top:   1,
+						Size:  11,
+						Left:  6,
 						Color: &mediumGray,
-					}),
+					})...,
 				),
 			)
 		}
 
 		if permission.Category != "" {
-			categoryText := wrapText(fmt.Sprintf("Category: %s", permission.Category), 100)
-			m.AddRow(dynamicRowHeight(categoryText, 4, 4),
+			categoryText := wrapText(fmt.Sprintf("Category: %s", permission.Category), 76)
+			m.AddRow(dynamicRowHeight(categoryText, 7, 5)+2,
 				col.New(12).Add(
-					text.New(categoryText, props.Text{
-						Size:  8,
-						Left:  5,
+					multiLine(categoryText, props.Text{
+						Top:   1,
+						Size:  10,
+						Left:  6,
 						Style: fontstyle.Italic,
 						Color: &slateBlue,
-					}),
+					})...,
 				),
 			)
 		}
 
-		m.AddRow(2)
+		m.AddRow(5)
 	}
 }
 
 func (rm *Manager) buildFooter(m core.Maroto) {
 	m.AddRows(
-		row.New(5),
+		row.New(10),
 		row.New(1).WithStyle(&props.Cell{BackgroundColor: &charcoalDivider}),
-		row.New(7).Add(
+		row.New(9).Add(
 			col.New(6).Add(
 				text.New("AppMonitor  |  Analysis report", props.Text{
-					Size:  7,
-					Left:  2,
+					Top:   3,
+					Size:  9,
+					Left:  4,
 					Color: &mediumGray,
 				}),
 			),
 			col.New(6).Add(
 				text.New("Generated for research and review", props.Text{
-					Size:  7,
+					Top:   3,
+					Size:  9,
 					Align: align.Right,
-					Right: 2,
+					Right: 4,
 					Color: &mediumGray,
 				}),
 			),

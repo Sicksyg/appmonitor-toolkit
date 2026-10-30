@@ -121,11 +121,11 @@ func TestAnalyseDetectSDKDetailsIncludesSignatureMetadata(t *testing.T) {
 }
 
 func TestTrackerScanRemoteCommandAddsRootlessPaths(t *testing.T) {
-	command := trackerScanRemoteCommand("trackerscan", "com.example.app")
+	command := trackerScanRemoteCommand("am_scanner", "com.example.app")
 	for _, expected := range []string{
 		`/var/jb/usr/local/bin`,
 		`/var/jb/usr/bin`,
-		`exec 'trackerscan' --dump 'com.example.app'`,
+		`exec 'am_scanner' --dump 'com.example.app'`,
 	} {
 		if !strings.Contains(command, expected) {
 			t.Errorf("trackerScanRemoteCommand() = %q, missing %q", command, expected)
@@ -134,11 +134,11 @@ func TestTrackerScanRemoteCommandAddsRootlessPaths(t *testing.T) {
 }
 
 func TestTrackerScanListRemoteCommand(t *testing.T) {
-	command := trackerScanListRemoteCommand("trackerscan")
+	command := trackerScanListRemoteCommand("am_scanner")
 	for _, expected := range []string{
 		`/var/jb/usr/local/bin`,
 		`/var/jb/usr/bin`,
-		`exec 'trackerscan' --list --json`,
+		`exec 'am_scanner' --list --json`,
 	} {
 		if !strings.Contains(command, expected) {
 			t.Errorf("trackerScanListRemoteCommand() = %q, missing %q", command, expected)
@@ -272,7 +272,7 @@ func TestListInstalledAppsCachesDecodedIcon(t *testing.T) {
 		t.Fatalf("read cached icon: %v", err)
 	}
 	if !bytes.Equal(cachedIcon, iconData) {
-		t.Fatal("cached icon bytes differ from trackerscan icon")
+		t.Fatal("cached icon bytes differ from am_scanner icon")
 	}
 }
 
@@ -337,12 +337,21 @@ func TestRunAppAnalysisReturnsTrackerClassNames(t *testing.T) {
 	}
 	if result.Version != "2.4" || len(result.Classes) != 2 ||
 		result.Classes[0] != "FirstClass" || result.Classes[1] != "SecondClass" {
-		t.Fatalf("unexpected trackerscan results: %+v", result)
+		t.Fatalf("unexpected am_scanner results: %+v", result)
 	}
 	if result.TrackerWarning != nil {
-		t.Fatalf("unexpected trackerscan warning: %v", result.TrackerWarning)
+		t.Fatalf("unexpected am_scanner warning: %v", result.TrackerWarning)
 	}
 	if _, err := os.Stat(scanPath); err != nil {
-		t.Fatalf("trackerscan JSON output was not saved: %v", err)
+		t.Fatalf("am_scanner JSON output was not saved: %v", err)
+	}
+}
+
+func TestIsSpawnMemoryError(t *testing.T) {
+	if !isSpawnMemoryError("posix_spawn(SUSPENDED) /x/App.app/App: Cannot allocate memory") {
+		t.Error("ENOMEM spawn failure not detected")
+	}
+	if isSpawnMemoryError("some other failure") || isSpawnMemoryError("") {
+		t.Error("unrelated errors must not match")
 	}
 }

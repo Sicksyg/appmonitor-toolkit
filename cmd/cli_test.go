@@ -60,7 +60,7 @@ func TestPushToDatabasePersistsAppInfo(t *testing.T) {
 		Version:          "1.12.1",
 		AppStoreURL:      "https://apps.apple.com/app/example",
 		MinimumOSVersion: "16.0",
-		TrackerScanPath:  "/tmp/example-trackerscan.json",
+		TrackerScanPath:  "/tmp/example-am_scanner.json",
 		SDKs:             map[string][]string{"iOS": {"ExampleSDK"}},
 	}
 
@@ -199,7 +199,7 @@ func TestTrackerOutputPathsUsesSafeBundleID(t *testing.T) {
 	if filepath.Dir(classesPath) != classDir {
 		t.Fatalf("class names path escaped class log directory: %q", classesPath)
 	}
-	if filepath.Dir(jsonPath) != filepath.Join(filepath.Dir(classDir), "trackerscan") {
+	if filepath.Dir(jsonPath) != filepath.Join(filepath.Dir(classDir), "am_scanner") {
 		t.Fatalf("unexpected JSON path: %q", jsonPath)
 	}
 	if strings.Contains(filepath.Base(classesPath), "/") || strings.Contains(filepath.Base(classesPath), "..") {

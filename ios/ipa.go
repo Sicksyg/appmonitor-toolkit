@@ -138,6 +138,14 @@ func PrepareIPA(ctx context.Context, inputPath, outputPath, targetVersion string
 			hasIncompatible = true
 		}
 	}
+	if !prune {
+		if result, ok, err := fastPatchIPA(inputAbs, outputAbs, bundles, target); err != nil {
+			return IPAResult{}, err
+		} else if ok {
+			result.HasIncompatibleExtensions = hasIncompatible
+			return result, nil
+		}
+	}
 
 	destination, err := os.MkdirTemp("", "appmonitor-ipa-*")
 	if err != nil {
@@ -367,6 +375,13 @@ func patchBundle(ctx context.Context, bundlePath string, target uint32, ldidPath
 	} else if err != nil {
 		return false, fmt.Errorf("inspect executable %q: %w", executable, err)
 	}
+	// Rewriting and re-signing a FairPlay-encrypted binary makes iOS refuse to launch it
+	// (posix_spawn ENOMEM); the Info.plist patch alone is enough to install it.
+	if encrypted, err := machOIsEncrypted(executablePath); err != nil {
+		return false, err
+	} else if encrypted {
+		return changed, nil
+	}
 	patched, binaryChanged, err := patchMachOMinimumOS(executablePath, target)
 	if err != nil {
 		return false, err
@@ -386,6 +401,40 @@ func patchBundle(ctx context.Context, bundlePath string, target uint32, ldidPath
 func infoString(info map[string]any, key string) string {
 	value, _ := info[key].(string)
 	return value
+}
+
+// machOIsEncrypted reports whether a 64-bit arm64 Mach-O has a non-zero cryptid.
+func machOIsEncrypted(binaryPath string) (bool, error) {
+	data, err := os.ReadFile(binaryPath)
+	if err != nil {
+		return false, fmt.Errorf("read executable: %w", err)
+	}
+	return machOHeaderEncrypted(data)
+}
+
+// machOHeaderEncrypted inspects the load commands in data, which may be just the header.
+func machOHeaderEncrypted(data []byte) (bool, error) {
+	if len(data) < 32 || binary.LittleEndian.Uint32(data[:4]) != 0xfeedfacf ||
+		binary.LittleEndian.Uint32(data[4:8]) != 0x0100000c {
+		return false, nil
+	}
+	ncmds := binary.LittleEndian.Uint32(data[16:20])
+	offset := uint64(32)
+	for index := uint32(0); index < ncmds; index++ {
+		if offset+8 > uint64(len(data)) {
+			return false, fmt.Errorf("malformed Mach-O load command table")
+		}
+		command := binary.LittleEndian.Uint32(data[offset : offset+4])
+		commandSize := binary.LittleEndian.Uint32(data[offset+4 : offset+8])
+		if commandSize < 8 || offset+uint64(commandSize) > uint64(len(data)) {
+			return false, fmt.Errorf("malformed Mach-O load command size")
+		}
+		if command == 0x2c && commandSize >= 24 {
+			return binary.LittleEndian.Uint32(data[offset+16:offset+20]) != 0, nil
+		}
+		offset += uint64(commandSize)
+	}
+	return false, nil
 }
 
 func patchMachOMinimumOS(binaryPath string, target uint32) ([]byte, bool, error) {
@@ -554,4 +603,29 @@ func formatPackedVersion(value uint32) string {
 		return fmt.Sprintf("%d.%d", major, minor)
 	}
 	return fmt.Sprintf("%d.%d.%d", major, minor, patch)
+}
+
+// ipaMinimumOSVersion reads MinimumOSVersion from the main app's Info.plist inside an IPA.
+func ipaMinimumOSVersion(ipaPath string) (string, error) {
+	archive, err := zip.OpenReader(ipaPath)
+	if err != nil {
+		return "", fmt.Errorf("open IPA archive: %w", err)
+	}
+	defer archive.Close()
+	for _, file := range archive.File {
+		entry := path.Clean(file.Name)
+		if !strings.HasPrefix(entry, "Payload/") || strings.Count(entry, "/") != 2 || !strings.HasSuffix(entry, ".app/Info.plist") {
+			continue
+		}
+		data, err := readZipEntry(file)
+		if err != nil {
+			return "", err
+		}
+		var info map[string]any
+		if _, err := plist.Unmarshal(data, &info); err != nil {
+			return "", fmt.Errorf("parse %s: %w", entry, err)
+		}
+		return strings.TrimSpace(infoString(info, "MinimumOSVersion")), nil
+	}
+	return "", fmt.Errorf("IPA does not contain Payload/<app>.app/Info.plist")
 }

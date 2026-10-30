@@ -55,11 +55,14 @@
             <div class="spacer"></div>
 
             <header class="view-header">
-                <h3>ReAuthenticate Apple AppStore</h3>
-                <p>Forces re-authentication with AppleID credentials.</p>
+                <h3>Sign in to Apple AppStore</h3>
+                <p>Opens Terminal to run <code>ipatool auth login</code>. Enter your Apple ID, password and the 2FA
+                    code from your trusted device. The session is stored in your keychain, so this is only needed once.</p>
             </header>
             <div class="action-row">
-                <button class="btn ios" type="button" @click="reAuthenticateAppleID">ReAuthenticate</button>
+                <button class="btn ios" type="button" @click="openLogin">Open Terminal to sign in</button>
+                <button class="btn ios" type="button" @click="refreshAuth">Check status</button>
+                <span v-if="authStatus" class="save-status">{{ authStatus }}</span>
             </div>
         </section>
 
@@ -139,7 +142,7 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import { GetSettings, SaveSettings, AuthenticateAppleID } from '../../wailsjs/go/main/App'
+import { GetSettings, SaveSettings, AuthenticateAppleID, IsAppleIDAuthenticated } from '../../wailsjs/go/main/App'
 import { SetReportSavePath, OpenSettingsDir, OpenOutputDir, ClearTmpDir } from '../../wailsjs/go/main/App'
 
 const settings = ref({
@@ -150,6 +153,7 @@ const settings = ref({
 })
 const reportOutputPlaceholder = 'No directory selected yet'
 const saveStatus = ref('')
+const authStatus = ref('')
 
 onMounted(async () => {
     try {
@@ -157,6 +161,7 @@ onMounted(async () => {
     } catch (error) {
         console.error('Error loading settings:', error)
     }
+    await refreshAuth()
 })
 
 async function save() {
@@ -206,11 +211,20 @@ async function openSettingsDir() {
     }
 }
 
-async function reAuthenticateAppleID() {
+async function refreshAuth() {
+    try {
+        authStatus.value = (await IsAppleIDAuthenticated()) ? 'Signed in (keychain)' : 'Not signed in'
+    } catch (error) {
+        console.error('Error checking Apple ID session:', error)
+    }
+}
+
+async function openLogin() {
     try {
         await AuthenticateAppleID()
+        authStatus.value = 'Finish signing in in Terminal, then click Check status'
     } catch (error) {
-        console.error('Error re-authenticating Apple ID:', error)
+        authStatus.value = 'Could not open Terminal: ' + error
     }
 }
 

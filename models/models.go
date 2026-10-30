@@ -75,6 +75,8 @@ type AppInfo struct {
 	IosPermissions     map[string]IosPermissionDetail     `json:"iosPermissions,omitempty"`
 	BundleInfo         map[string]any                     `json:"bundleInfo,omitempty"`
 	AndroidPermissions map[string]AndroidPermissionDetail `json:"androidPermissions,omitempty"`
+	// SDKDetails carries iOS signature metadata for the PDF report; it is not persisted.
+	SDKDetails map[string]IosSDKDetail `json:"-"`
 }
 
 // AnalysisDatabase keeps analyses grouped by application and version.

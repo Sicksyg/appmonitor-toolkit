@@ -46,9 +46,12 @@ The script resolves `ideviceinstaller`, `idevice_id`, and `ideviceinfo` from
 `libimobiledevice`, `iproxy` from `libusbmuxd`, and `ipatool` and `ldid` from
 their own formulae. It stages tools and libraries into the architecture
 folders under `assets/`, rewrites install names and runtime paths, ad-hoc
-signs the staged binaries, then runs the Wails and CLI builds. The bundled
-`iproxy` lets Finder-launched builds create the USB tunnel without depending
-on Homebrew being on the app's `PATH`.
+signs the staged binaries, then runs the Wails and CLI builds. It caches
+SHA-256 fingerprints under `~/Library/Caches/AppMonitor/build-release/` and
+skips copying, patching, and signing binaries whose sources and staged files
+are unchanged. Missing or modified staged files are rebuilt and signed again.
+The bundled `iproxy` lets Finder-launched builds create the USB tunnel without
+depending on Homebrew being on the app's `PATH`.
 
 To stage and sign tools without building or launching the app:
 

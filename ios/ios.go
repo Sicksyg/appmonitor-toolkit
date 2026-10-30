@@ -261,7 +261,7 @@ type trackerScanClass struct {
 	Source string `json:"source"`
 }
 
-// TrackerScanDump represents the raw evidence returned by `trackerscan --dump`.
+// TrackerScanDump represents the raw evidence returned by `am_scanner --dump`.
 type TrackerScanDump struct {
 	BundleID         string             `json:"bundleID"`
 	Version          string             `json:"version"`
@@ -330,7 +330,7 @@ func MinimumOSVersionFromStoreResponse(response string) (string, error) {
 	return strings.TrimSpace(result.Results[0].MinimumOSVersion), nil
 }
 
-// StartSSH establishes the persistent SSH connection used for trackerscan.
+// StartSSH establishes the persistent SSH connection used for am_scanner.
 // Connection failures are logged and remain non-fatal to the iOS analysis flow.
 func (m *Manager) StartSSH(ctx context.Context) {
 	if m.sshScriptPath == "" {
@@ -573,7 +573,7 @@ func (m *Manager) sshEnvironment(master bool, controlAction string) []string {
 	return env
 }
 
-// RunAppAnalysis installs the latest app when requested and runs trackerscan.
+// RunAppAnalysis installs the latest app when requested and runs am_scanner.
 func (m *Manager) RunAppAnalysis(ctx context.Context, options AnalysisOptions) (AnalysisResult, error) {
 	if m.helpers == nil {
 		return AnalysisResult{}, fmt.Errorf("iOS helper manager is not configured")
@@ -588,14 +588,20 @@ func (m *Manager) RunAppAnalysis(ctx context.Context, options AnalysisOptions) (
 	}
 	minimumOSVersion := strings.TrimSpace(options.MinimumOSVersion)
 	if !options.AnalyzeInstalledApp {
-		progress("download", "Downloading app", 10)
+		progress("download", "Downloading app from the App Store", 10)
 		if err := m.helpers.DownloadApp(options.BundleID, options.AppleEmail, options.ApplePassword, options.IPADirectory); err != nil {
 			return AnalysisResult{}, fmt.Errorf("unable to download %s: %w", options.BundleID, err)
 		}
 
 		ipaPath := filepath.Join(options.IPADirectory, options.BundleID+".ipa")
 		if minimumOSVersion == "" {
-			return AnalysisResult{}, fmt.Errorf("unable to determine the app's MinimumOSVersion from the App Store lookup")
+			// The App Store lookup sometimes omits it; the IPA declares it too.
+			version, err := ipaMinimumOSVersion(ipaPath)
+			if err != nil || version == "" {
+				return AnalysisResult{}, fmt.Errorf("unable to determine the app's MinimumOSVersion from the App Store lookup or the IPA (%v)", err)
+			}
+			minimumOSVersion = version
+			m.logger("MinimumOSVersion taken from the IPA Info.plist: "+version, "Manager.RunAppAnalysis")
 		}
 
 		needsPatch, unsupported, err := MinimumOSVersionPolicy(minimumOSVersion)
@@ -606,7 +612,11 @@ func (m *Manager) RunAppAnalysis(ctx context.Context, options AnalysisOptions) (
 			return AnalysisResult{}, &UnsupportedMinimumOSVersionError{Version: minimumOSVersion}
 		}
 
-		progress("install", "Preparing app for installation", 25)
+		if needsPatch {
+			progress("prepare", "Patching app to run on iOS 16 (minimum OS version)", 20)
+		} else {
+			progress("prepare", "App is compatible with the device", 20)
+		}
 		installIPAPath := ipaPath
 		var prepared IPAResult
 		if needsPatch {
@@ -622,13 +632,16 @@ func (m *Manager) RunAppAnalysis(ctx context.Context, options AnalysisOptions) (
 				m.logger("IPA contains extension points outside the compatibility allowlist", "Manager.RunAppAnalysis")
 			}
 		}
-		progress("install", "Installing latest app", 25)
+		progress("install", "Installing app on the iPhone", 28)
 		if err := m.helpers.InstallApp(options.UDID, installIPAPath); err != nil {
+			if errors.Is(err, helpers.ErrInstallCoordinatorConflict) {
+				return AnalysisResult{}, err
+			}
 			if !needsPatch || !prepared.HasIncompatibleExtensions {
 				return AnalysisResult{}, fmt.Errorf("install %s: %w", options.BundleID, err)
 			}
 			m.logger("Initial install failed; retrying once with incompatible extensions pruned: "+err.Error(), "Manager.RunAppAnalysis")
-			progress("install_retry", "Retrying installation without incompatible extensions", 30)
+			progress("install_retry", "Install failed, retrying without incompatible extensions", 32)
 			pruned, pruneErr := PrepareIPA(ctx, ipaPath, ipaOutputPath(options.IPADirectory, options.BundleID, "-pruned"), "16.0", true, m.ipaTools())
 			if pruneErr != nil {
 				return AnalysisResult{}, fmt.Errorf("install %s failed (%v), and pruning extensions failed: %w", options.BundleID, err, pruneErr)
@@ -644,20 +657,24 @@ func (m *Manager) RunAppAnalysis(ctx context.Context, options AnalysisOptions) (
 	}
 
 	result := AnalysisResult{MinimumOSVersion: minimumOSVersion}
-	progress("trackerscan", "Running on-device trackerscan", 35)
-	m.logger("Starting on-device trackerscan for "+options.BundleID, "Manager.RunAppAnalysis")
+	progress("connect", "Connecting to the iPhone over SSH", 35)
+	progress("am_scanner", "Running am_scanner on the device (this can take a minute)", 45)
+	m.logger("Starting on-device am_scanner for "+options.BundleID, "Manager.RunAppAnalysis")
 	dump, scanErr := m.runTrackerScan(ctx, options.BundleID, options.TrackerScanPath)
 	if scanErr != nil {
 		result.TrackerWarning = scanErr
-		m.logger("Trackerscan warning: "+scanErr.Error(), "Manager.RunAppAnalysis")
-		progress("trackerscan_warning", "Trackerscan warning: "+scanErr.Error(), 40)
+		m.logger("am_scanner warning: "+scanErr.Error(), "Manager.RunAppAnalysis")
+		progress("am_scanner_warning", "am_scanner warning: "+scanErr.Error(), 50)
 	} else {
 		result.TrackerScanPath = options.TrackerScanPath
-		m.logger("Trackerscan returned JSON for "+options.BundleID+"; saved to "+options.TrackerScanPath, "Manager.RunAppAnalysis")
+		m.logger("am_scanner returned JSON for "+options.BundleID+"; saved to "+options.TrackerScanPath, "Manager.RunAppAnalysis")
 		if dump.RuntimeError != "" {
 			result.TrackerWarning = fmt.Errorf("runtime scan was incomplete: %s", dump.RuntimeError)
-			m.logger("Trackerscan warning: "+result.TrackerWarning.Error(), "Manager.RunAppAnalysis")
-			progress("trackerscan_warning", "Trackerscan warning: "+result.TrackerWarning.Error(), 40)
+			if isSpawnMemoryError(dump.RuntimeError) {
+				result.TrackerWarning = fmt.Errorf("%w: %w", ErrAppSpawnFailed, result.TrackerWarning)
+			}
+			m.logger("am_scanner warning: "+result.TrackerWarning.Error(), "Manager.RunAppAnalysis")
+			progress("am_scanner_warning", "am_scanner warning: "+result.TrackerWarning.Error(), 50)
 		}
 	}
 
@@ -677,8 +694,19 @@ func (m *Manager) RunAppAnalysis(ctx context.Context, options AnalysisOptions) (
 		result.Permissions = mergePermissions(result.Permissions, m.enrichTrackerPermissions(dump.Permissions))
 		result.BundleInfo = mergeBundleInfo(result.BundleInfo, dump.BundleInfo)
 	}
-	progress("analysis_complete", "On-device analysis complete", 75)
+	progress("analysis_complete", "am_scanner finished, collecting results", 75)
 	return result, nil
+}
+
+// ErrAppSpawnFailed means iOS refused to start the app for the runtime scan
+// (posix_spawn "Cannot allocate memory"). The cause is either memory pressure on the
+// device or iOS rejecting a binary that AppMonitor patched for an older iOS version.
+var ErrAppSpawnFailed = errors.New("iOS could not start the app for the runtime scan (posix_spawn: Cannot allocate memory). " +
+	"This is either low memory on the iPhone or iOS rejecting the patched binary. Free memory (ldrestart or reboot) and run again; " +
+	"if it persists, the app cannot be runtime-scanned on this iPhone")
+
+func isSpawnMemoryError(runtimeError string) bool {
+	return strings.Contains(runtimeError, "Cannot allocate memory")
 }
 
 func (m *Manager) runTrackerScan(ctx context.Context, bundleID, outputPath string) (TrackerScanDump, error) {
@@ -704,13 +732,13 @@ func (m *Manager) runTrackerScan(ctx context.Context, bundleID, outputPath strin
 	if err != nil {
 		detail := strings.TrimSpace(stderr.String())
 		if detail != "" {
-			return TrackerScanDump{}, fmt.Errorf("run trackerscan over SSH: %w: %s", err, detail)
+			return TrackerScanDump{}, fmt.Errorf("run am_scanner over SSH: %w: %s", err, detail)
 		}
-		return TrackerScanDump{}, fmt.Errorf("run trackerscan over SSH: %w", err)
+		return TrackerScanDump{}, fmt.Errorf("run am_scanner over SSH: %w", err)
 	}
 	if outputPath != "" {
 		if err := os.WriteFile(outputPath, stdout, 0644); err != nil {
-			return TrackerScanDump{}, fmt.Errorf("save trackerscan JSON: %w", err)
+			return TrackerScanDump{}, fmt.Errorf("save am_scanner JSON: %w", err)
 		}
 	}
 	dump, err := DecodeTrackerScanDump(stdout)
@@ -718,7 +746,7 @@ func (m *Manager) runTrackerScan(ctx context.Context, bundleID, outputPath strin
 		return TrackerScanDump{}, err
 	}
 	if dump.BundleID != bundleID {
-		return TrackerScanDump{}, fmt.Errorf("trackerscan returned bundle ID %q, expected %q", dump.BundleID, bundleID)
+		return TrackerScanDump{}, fmt.Errorf("am_scanner returned bundle ID %q, expected %q", dump.BundleID, bundleID)
 	}
 	return dump, nil
 }
@@ -766,7 +794,7 @@ func (m *Manager) waitForSSH(ctx context.Context) error {
 	return nil
 }
 
-// ListInstalledApps retrieves metadata and icon data from trackerscan over the
+// ListInstalledApps retrieves metadata and icon data from am_scanner over the
 // persistent iOS SSH connection, then caches decoded icons for reports.
 func (m *Manager) ListInstalledApps(ctx context.Context) ([]helpers.InstalledApp, error) {
 	if m.sshScriptPath == "" {
@@ -790,9 +818,9 @@ func (m *Manager) ListInstalledApps(ctx context.Context) ([]helpers.InstalledApp
 	if err != nil {
 		detail := strings.TrimSpace(stderr.String())
 		if detail != "" {
-			return nil, fmt.Errorf("list installed apps with trackerscan over SSH: %w: %s", err, detail)
+			return nil, fmt.Errorf("list installed apps with am_scanner over SSH: %w: %s", err, detail)
 		}
-		return nil, fmt.Errorf("list installed apps with trackerscan over SSH: %w", err)
+		return nil, fmt.Errorf("list installed apps with am_scanner over SSH: %w", err)
 	}
 	apps, err := DecodeTrackerScanAppList(stdout)
 	if err != nil {
@@ -838,7 +866,7 @@ func trackerScanListRemoteCommand(command string) string {
 		shellQuote(command) + " --list --json"
 }
 
-// DecodeTrackerScanAppList validates trackerscan's --list --json output and
+// DecodeTrackerScanAppList validates am_scanner's --list --json output and
 // converts icon bytes into data URLs suitable for the Wails frontend.
 func DecodeTrackerScanAppList(data []byte) ([]helpers.InstalledApp, error) {
 	var response struct {
@@ -851,15 +879,15 @@ func DecodeTrackerScanAppList(data []byte) ([]helpers.InstalledApp, error) {
 		} `json:"apps"`
 	}
 	if err := json.Unmarshal(data, &response); err != nil {
-		return nil, fmt.Errorf("decode trackerscan app list JSON: %w", err)
+		return nil, fmt.Errorf("decode am_scanner app list JSON: %w", err)
 	}
 	if response.Apps == nil {
-		return nil, fmt.Errorf("trackerscan app list JSON is missing apps")
+		return nil, fmt.Errorf("am_scanner app list JSON is missing apps")
 	}
 	apps := make([]helpers.InstalledApp, 0, len(response.Apps))
 	for index, app := range response.Apps {
 		if !validBundleID(app.BundleID) || strings.TrimSpace(app.Name) == "" {
-			return nil, fmt.Errorf("trackerscan app list entry %d has invalid bundleID or name", index)
+			return nil, fmt.Errorf("am_scanner app list entry %d has invalid bundleID or name", index)
 		}
 		installed := helpers.InstalledApp{
 			CFBundleIdentifier:  app.BundleID,
@@ -925,6 +953,11 @@ func parseIconDataURI(uri string) ([]byte, string, error) {
 	return data, strings.TrimSuffix(metadata, ";base64"), nil
 }
 
+// DetectSDKDetailsFromDump matches signatures against the classes and frameworks of a saved scan.
+func (m *Manager) DetectSDKDetailsFromDump(dump TrackerScanDump) map[string]models.IosSDKDetail {
+	return m.detectTrackerSDKDetails(dump)
+}
+
 func (m *Manager) detectTrackerSDKDetails(dump TrackerScanDump) map[string]models.IosSDKDetail {
 	evidence := make(map[string]struct{}, len(dump.Classes)+len(dump.FrameworkNames))
 	for _, class := range dump.Classes {
@@ -951,7 +984,7 @@ func (m *Manager) enrichTrackerPermissions(raw map[string]string) map[string]mod
 	}
 	permissions, err := m.AnalyseDetectPermissions(raw)
 	if err != nil {
-		m.logger("Unable to enrich trackerscan permissions: "+err.Error(), "Manager.RunAppAnalysis")
+		m.logger("Unable to enrich am_scanner permissions: "+err.Error(), "Manager.RunAppAnalysis")
 		return nil
 	}
 	return permissions
@@ -1044,22 +1077,22 @@ func MinimumOSVersionPolicy(version string) (needsPatch, unsupported bool, err e
 	return needsPatch, unsupported, nil
 }
 
-// DecodeTrackerScanDump decodes and validates a trackerscan JSON dump.
+// DecodeTrackerScanDump decodes and validates an am_scanner JSON dump.
 func DecodeTrackerScanDump(data []byte) (TrackerScanDump, error) {
 	var dump TrackerScanDump
 	if err := json.Unmarshal(data, &dump); err != nil {
-		return TrackerScanDump{}, fmt.Errorf("decode trackerscan JSON: %w", err)
+		return TrackerScanDump{}, fmt.Errorf("decode am_scanner JSON: %w", err)
 	}
 	if dump.BundleID == "" {
-		return TrackerScanDump{}, fmt.Errorf("trackerscan JSON is missing bundleID")
+		return TrackerScanDump{}, fmt.Errorf("am_scanner JSON is missing bundleID")
 	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(data, &fields); err != nil {
-		return TrackerScanDump{}, fmt.Errorf("decode trackerscan JSON fields: %w", err)
+		return TrackerScanDump{}, fmt.Errorf("decode am_scanner JSON fields: %w", err)
 	}
 	for _, field := range []string{"classes", "frameworkNames", "plistTokens"} {
 		if _, exists := fields[field]; !exists {
-			return TrackerScanDump{}, fmt.Errorf("trackerscan JSON is missing %s", field)
+			return TrackerScanDump{}, fmt.Errorf("am_scanner JSON is missing %s", field)
 		}
 	}
 	return dump, nil

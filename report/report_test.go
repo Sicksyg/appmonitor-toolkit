@@ -1,10 +1,12 @@
 package report
 
 import (
-	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/ledongthuc/pdf"
 
 	"AppMonitor/ios"
 	"AppMonitor/models"
@@ -117,6 +119,7 @@ func TestMakeMarotoReport_WritesPDFWithSDKMetadataAndLongDescription(t *testing.
 	if len(content) < 4 || string(content[:4]) != "%PDF" {
 		t.Fatalf("generated file is not a PDF: %s", outPath)
 	}
+	pdfText := extractPDFText(t, outPath)
 	for _, text := range []string{
 		"ANALYSIS TIME",
 		"21 Oct 2026, 06:45:00 UTC",
@@ -128,18 +131,47 @@ func TestMakeMarotoReport_WritesPDFWithSDKMetadataAndLongDescription(t *testing.
 		"iOS SDK",
 		"Owned by Meta Platforms.",
 		"https://www.meta.com/",
-		"https://github.com/facebook/facebook-ios-sdk",
+		"github.com/facebook/facebook-ios-sdk",
 		"FBSDKApplicationDelegate",
 		"FBSDKCoreKit",
 	} {
-		if !bytes.Contains(content, []byte(text)) {
+		if !strings.Contains(pdfText, text) {
 			t.Errorf("generated PDF does not contain report text %q", text)
 		}
 	}
-	if bytes.Contains(content, []byte("FBSDKApplicationDelegate, FBSDKCoreKit")) {
+	if strings.Contains(pdfText, "FBSDKApplicationDelegate, FBSDKCoreKit") {
 		t.Error("class evidence was rendered as a comma-separated paragraph, not a list")
 	}
 
+}
+
+// extractPDFText returns the text of every page; the report embeds subsetted fonts, so raw bytes are not searchable.
+func extractPDFText(t *testing.T, path string) string {
+	t.Helper()
+	file, reader, err := pdf.Open(path)
+	if err != nil {
+		t.Fatalf("open generated PDF: %v", err)
+	}
+	defer file.Close()
+	var all strings.Builder
+	for i := 1; i <= reader.NumPage(); i++ {
+		text, err := reader.Page(i).GetPlainText(nil)
+		if err != nil {
+			t.Fatalf("extract text from page %d: %v", i, err)
+		}
+		all.WriteString(text)
+		all.WriteString("\n")
+	}
+	return all.String()
+}
+
+func TestHardWrap(t *testing.T) {
+	if got := hardWrap("abcdef", 4); got != "abcd\nef" {
+		t.Fatalf("hardWrap() = %q", got)
+	}
+	if got := hardWrap("abc", 4); got != "abc" {
+		t.Fatalf("hardWrap() = %q, want unchanged", got)
+	}
 }
 
 func TestFormatAnalysisDate(t *testing.T) {

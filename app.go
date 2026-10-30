@@ -464,7 +464,7 @@ func (a *App) chooseInstalledIOSAnalysis(bundleID string) (analyzeInstalled, can
 	choice, err := wruntime.MessageDialog(a.ctx, wruntime.MessageDialogOptions{
 		Type:          wruntime.QuestionDialog,
 		Title:         "App Already Installed",
-		Message:       fmt.Sprintf("%s (%s) is already installed on the connected iPhone. Install the latest version before analysis, or analyze the currently installed app with trackerscan only?", name, bundleID),
+		Message:       fmt.Sprintf("%s (%s) is already installed on the connected iPhone. Install the latest version before analysis, or analyze the currently installed app with am_scanner only?", name, bundleID),
 		Buttons:       []string{installLatestIOSAppChoice, analyzeInstalledIOSAppChoice, cancelIOSAnalysisChoice},
 		DefaultButton: cancelIOSAnalysisChoice,
 		CancelButton:  cancelIOSAnalysisChoice,
@@ -504,7 +504,7 @@ func (a *App) StartIosAnalysis() {
 		return
 	}
 
-	a.emitStatus("start", "Starting analysis", 0)
+	a.emitStatus("start", "Starting analysis of "+a.appinfo.Name, 2)
 	a.Log("Starting analysis for: "+a.appinfo.BundleID, "App.StartAnalysis")
 
 	a.appinfo.SDKs = make(map[string][]string)
@@ -521,11 +521,11 @@ func (a *App) StartIosAnalysis() {
 		ApplePassword:       a.settings.Auth.ApplePassword,
 		IPADirectory:        a.tmpIpaPath,
 		MinimumOSVersion:    a.appinfo.MinimumOSVersion,
-		TrackerScanPath:     filepath.Join(a.iosReportPath, fmt.Sprintf("%s_%d_trackerscan.json", a.appinfo.BundleID, time.Now().Unix())),
+		TrackerScanPath:     filepath.Join(a.iosReportPath, fmt.Sprintf("%s_%d_am_scanner.json", a.appinfo.BundleID, time.Now().Unix())),
 		Progress:            a.emitStatus,
 	})
 	if result.TrackerWarning != nil {
-		a.Log("Trackerscan warning: "+result.TrackerWarning.Error(), "App.StartIosAnalysis")
+		a.Log("am_scanner warning: "+result.TrackerWarning.Error(), "App.StartIosAnalysis")
 	}
 	if err != nil {
 		if result.MinimumOSVersion != "" {
@@ -558,7 +558,9 @@ func (a *App) StartIosAnalysis() {
 	}
 	a.appinfo.AnalysisDate = time.Now().UTC().Format(time.RFC3339)
 
-	a.emitStatus("report", "Generating report", 85)
+	a.emitStatus("matching", "Matching SDK signatures and permissions", 80)
+	time.Sleep(time.Second)
+	a.emitStatus("report", "Generating the PDF report", 88)
 	reportPath := filepath.Join(a.iosReportPath, fmt.Sprintf("%s_%d_report.pdf", a.appinfo.BundleID, time.Now().Unix()))
 	reportInput := report.Input{
 		ApplicationName:     a.appinfo.Name,
@@ -576,7 +578,7 @@ func (a *App) StartIosAnalysis() {
 	a.Log("Image path in report input: "+reportInput.AppStoreIconPath, "App.StartIosAnalysis")
 
 	if err := a.reportMgr.MakeMarotoReport(reportInput); err != nil {
-		a.emitStatus("error", "Report generation failed: "+err.Error(), 100)
+		a.emitStatus("error", "Could not generate the PDF report: "+err.Error(), 100)
 		a.Log("Error generating PDF report: "+err.Error(), "App.StartAnalysis")
 		return
 	}
@@ -591,18 +593,18 @@ func (a *App) StartIosAnalysis() {
 
 // ------------------------- Main Android analysis flow ----------------------- //
 func (a *App) StartAndroidAnalysis() {
-	a.emitStatus("start", "Starting Android analysis", 0)
+	a.emitStatus("start", "Starting analysis of "+a.appinfo.Name, 2)
 	a.Log("Starting Android analysis for: "+a.appinfo.BundleID, "App.StartAndroidAnalysis")
 
 	// get app data from Exodus API
-	a.emitStatus("fetch", "Fetching app data from Exodus API", 20)
+	a.emitStatus("fetch", "Contacting the Exodus Privacy API", 20)
 
 	// analyze the downloaded apk file using exodus api
-	a.emitStatus("analyze", "Analyzing app with Exodus", 60)
+	a.emitStatus("analyze", "Waiting for Exodus to report trackers and permissions", 45)
 
 	permissions, sdks, err := a.androidMgr.RunCompleteAnalysis(a.appinfo.BundleID, a.settings.ExodusAPIKey.Key)
 	if err != nil {
-		a.emitStatus("error", "Android analysis failed: "+err.Error(), 100)
+		a.emitStatus("error", "Exodus analysis failed: "+err.Error(), 100)
 		a.Log("Error during Android analysis: "+err.Error(), "App.StartAndroidAnalysis")
 		return
 	}
@@ -616,7 +618,7 @@ func (a *App) StartAndroidAnalysis() {
 
 	time.Sleep(time.Second * 2)
 
-	a.emitStatus("report", "Generating report", 85)
+	a.emitStatus("report", "Generating the PDF report", 85)
 	reportPath := filepath.Join(a.androidReportPath, fmt.Sprintf("%s_%d_report.pdf", a.appinfo.BundleID, time.Now().Unix()))
 	reportInput := report.Input{
 		ApplicationName:     a.appinfo.Name,
@@ -630,7 +632,7 @@ func (a *App) StartAndroidAnalysis() {
 		Permissions:         report.AndroidPermissionItems(a.appinfo.AndroidPermissions),
 	}
 	if err := a.reportMgr.MakeMarotoReport(reportInput); err != nil {
-		a.emitStatus("error", "Report generation failed: "+err.Error(), 100)
+		a.emitStatus("error", "Could not generate the PDF report: "+err.Error(), 100)
 		a.Log("Error generating PDF report: "+err.Error(), "App.StartAnalysis")
 		return
 	}
@@ -659,7 +661,7 @@ func (a *App) LoadFromPhone() string {
 	a.phoneApps = nil
 	apps, err := a.iosMgr.ListInstalledApps(ctx)
 	if err != nil {
-		a.Log("Unable to list installed apps with trackerscan: "+err.Error(), "App.LoadFromPhone")
+		a.Log("Unable to list installed apps with am_scanner: "+err.Error(), "App.LoadFromPhone")
 		return phoneErrorPayload(err)
 	}
 	a.phoneApps = apps
@@ -706,9 +708,14 @@ func (a *App) installedPhoneApp(bundleID string) (helpers.InstalledApp, bool) {
 	return helpers.InstalledApp{}, false
 }
 
-// Authentication function for Apple ID credentials. This is a wrapper around the helpers.Manager.AuthenticateAppleID method.
-func (a *App) AuthenticateAppleID() {
-	a.helpersMgr.AuthenticateAppleID(a.settings.Auth.AppleEmail, a.settings.Auth.ApplePassword)
+// AuthenticateAppleID opens Terminal for the interactive ipatool login (password and 2FA code).
+func (a *App) AuthenticateAppleID() error {
+	return a.helpersMgr.OpenAppleLoginTerminal()
+}
+
+// IsAppleIDAuthenticated tells the frontend whether a keychain session exists.
+func (a *App) IsAppleIDAuthenticated() bool {
+	return a.helpersMgr.IsAppleIDAuthenticated()
 }
 
 func (a *App) Search(bundleID string) string {

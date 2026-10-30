@@ -17,7 +17,8 @@
 #      @executable_path/../lib/darwin-<arch> rpath, and rewrites each dylib's
 #      dependencies to @loader_path/<dylib>.
 #   5. Sets each copied dylib ID to @rpath/<dylib> and ad-hoc signs all
-#      copied Mach-O files after their load commands have been changed.
+#      changed Mach-O files after their load commands have been changed.
+#      Unchanged files are skipped using source and staged-file SHA-256 hashes.
 #
 # Normal mode then clears generated reports and cached AppMonitor tools,
 # builds the Wails application and CLI, and opens the .app bundle.
@@ -34,7 +35,7 @@
 #
 # Requirements:
 #   zsh, Homebrew, Xcode command-line tools (otool, install_name_tool, lipo,
-#   codesign), Wails, and these Homebrew formulae:
+#   codesign), shasum, Wails, and these Homebrew formulae:
 #   libimobiledevice, ipatool, ldid, and libusbmuxd.
 #
 # The current script stages the architecture of the running Homebrew
@@ -91,6 +92,81 @@ done
 
 typeset -A library_sources
 typeset -A tool_sources
+typeset -A library_needs_stage
+typeset -A tool_needs_stage
+typeset -A library_source_hashes
+typeset -A tool_source_hashes
+
+# Increment this when the staging or signing procedure changes.
+stage_format=1
+stage_cache_dir="$HOME/Library/Caches/AppMonitor/build-release/darwin-$asset_arch"
+mkdir -p "$stage_cache_dir/libraries" "$stage_cache_dir/tools"
+for cache_dir in "$stage_cache_dir/libraries" "$stage_cache_dir/tools"; do
+	if [[ ! -w "$cache_dir" ]]; then
+		print -u2 "Cannot write staged binary cache: $cache_dir"
+		exit 1
+	fi
+done
+
+file_sha256() {
+	local output
+	output="$(shasum -a 256 "$1")" || return 1
+	print -r -- "${output%% *}"
+}
+
+stage_is_current() {
+	local source="$1"
+	local destination="$2"
+	local state_file="$3"
+	local require_executable="${4:-false}"
+	local cached_format
+	local cached_source_hash
+	local cached_destination_hash
+	local destination_hash
+
+	stage_source_hash="$(file_sha256 "$source")" || {
+		print -u2 "Unable to hash Homebrew source: $source"
+		return 2
+	}
+	if [[ ! -f "$destination" || ! -f "$state_file" ]]; then
+		return 1
+	fi
+	if [[ "$require_executable" == true && ! -x "$destination" ]]; then
+		return 1
+	fi
+	if [[ ! -r "$state_file" ]]; then
+		print -u2 "Unable to read staged binary cache: $state_file"
+		return 2
+	fi
+	read -r cached_format cached_source_hash cached_destination_hash < "$state_file" || return 1
+	if [[ "$cached_format" != "$stage_format" || "$cached_source_hash" != "$stage_source_hash" ]]; then
+		return 1
+	fi
+	destination_hash="$(file_sha256 "$destination")" || {
+		print -u2 "Unable to hash staged binary: $destination"
+		return 2
+	}
+	[[ "$cached_destination_hash" == "$destination_hash" ]]
+}
+
+record_stage() {
+	local source="$1"
+	local destination="$2"
+	local state_file="$3"
+	local expected_source_hash="$4"
+	local actual_source_hash
+	local destination_hash
+	local temporary_state="$state_file.tmp.$$"
+
+	actual_source_hash="$(file_sha256 "$source")" || return 1
+	if [[ "$actual_source_hash" != "$expected_source_hash" ]]; then
+		print -u2 "Source changed while staging: $source"
+		return 1
+	fi
+	destination_hash="$(file_sha256 "$destination")" || return 1
+	print -r -- "$stage_format $actual_source_hash $destination_hash" > "$temporary_state"
+	mv -f "$temporary_state" "$state_file"
+}
 
 is_system_library() {
 	case "$1" in
@@ -306,26 +382,64 @@ done
 # Copy the complete dependency closure and all root executables before editing
 # any Mach-O metadata, so every source is resolved from the same Homebrew set.
 for library_name in ${(ok)library_sources}; do
-	copy_library "$library_name"
+	source="${library_sources[$library_name]}"
+	destination="$lib_dir/$library_name"
+	state_file="$stage_cache_dir/libraries/$library_name.state"
+	if stage_is_current "$source" "$destination" "$state_file"; then
+		print "Unchanged $library_name; skipping copy, patching, and signing"
+	else
+		stage_status=$?
+		if [[ "$stage_status" -ne 1 ]]; then
+			exit "$stage_status"
+		fi
+		library_needs_stage[$library_name]=1
+		library_source_hashes[$library_name]="$stage_source_hash"
+		copy_library "$library_name"
+	fi
 done
 for tool in ideviceinstaller idevice_id ideviceinfo ipatool ldid iproxy; do
-	print "Copying $tool from ${tool_sources[$tool]}"
-	copy_tool "$tool"
+	source="${tool_sources[$tool]}"
+	destination="$bin_dir/$tool"
+	state_file="$stage_cache_dir/tools/$tool.state"
+	if stage_is_current "$source" "$destination" "$state_file" true; then
+		print "Unchanged $tool; skipping copy, patching, and signing"
+	else
+		stage_status=$?
+		if [[ "$stage_status" -ne 1 ]]; then
+			exit "$stage_status"
+		fi
+		tool_needs_stage[$tool]=1
+		tool_source_hashes[$tool]="$stage_source_hash"
+		print "Copying $tool from $source"
+		copy_tool "$tool"
+	fi
 done
 
 # Rewrite Homebrew install names and add the extracted layout's executable
-# rpath before applying fresh ad-hoc signatures to every copied Mach-O.
+# rpath before applying ad-hoc signatures to changed Mach-O files.
 for library_name in ${(ok)library_sources}; do
-	patch_library "$library_name"
+	if [[ "${library_needs_stage[$library_name]-}" == 1 ]]; then
+		patch_library "$library_name"
+	fi
 done
 for tool in ideviceinstaller idevice_id ideviceinfo ipatool ldid iproxy; do
-	patch_tool "$tool"
+	if [[ "${tool_needs_stage[$tool]-}" == 1 ]]; then
+		patch_tool "$tool"
+	fi
 done
 for library_name in ${(ok)library_sources}; do
-	sign_library "$library_name"
+	if [[ "${library_needs_stage[$library_name]-}" == 1 ]]; then
+		sign_library "$library_name"
+		record_stage "${library_sources[$library_name]}" "$lib_dir/$library_name" \
+			"$stage_cache_dir/libraries/$library_name.state" "${library_source_hashes[$library_name]}"
+	fi
 done
 for tool in ideviceinstaller idevice_id ideviceinfo ipatool ldid iproxy; do
-	sign_tool "$tool"
+	if [[ "${tool_needs_stage[$tool]-}" == 1 ]]; then
+		sign_tool "$tool"
+		record_stage "${tool_sources[$tool]}" "$bin_dir/$tool" \
+			"$stage_cache_dir/tools/$tool.state" "${tool_source_hashes[$tool]}"
+	fi
 done
 
 if [[ "${1-}" == "--stage-only" ]]; then

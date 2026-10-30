@@ -216,3 +216,32 @@ func assertZipEntry(t *testing.T, ipaPath, wanted string, present bool) {
 		t.Fatalf("IPA is missing entry %s", wanted)
 	}
 }
+
+func TestMachOIsEncrypted(t *testing.T) {
+	for _, cryptid := range []uint32{0, 1} {
+		data := make([]byte, 32+24)
+		binary.LittleEndian.PutUint32(data[0:], 0xfeedfacf)
+		binary.LittleEndian.PutUint32(data[4:], 0x0100000c)
+		binary.LittleEndian.PutUint32(data[16:], 1)
+		binary.LittleEndian.PutUint32(data[32:], 0x2c)
+		binary.LittleEndian.PutUint32(data[36:], 24)
+		binary.LittleEndian.PutUint32(data[48:], cryptid)
+		path := filepath.Join(t.TempDir(), "bin")
+		if err := os.WriteFile(path, data, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		got, err := machOIsEncrypted(path)
+		if err != nil || got != (cryptid != 0) {
+			t.Errorf("cryptid %d: got %v, %v", cryptid, got, err)
+		}
+	}
+}
+
+func TestIPAMinimumOSVersion(t *testing.T) {
+	ipaPath := filepath.Join(t.TempDir(), "sample.ipa")
+	createTestIPA(t, ipaPath)
+	got, err := ipaMinimumOSVersion(ipaPath)
+	if err != nil || got != "18.0" {
+		t.Fatalf("got %q, %v; want the main app's 18.0", got, err)
+	}
+}

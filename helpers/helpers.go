@@ -1,7 +1,9 @@
 package helpers
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -109,7 +111,7 @@ func (m *Manager) GetInfo() *DeviceInfo {
 			"Udid":       "",
 			"Connected":  "false",
 		}
-		runtime.EventsEmit(m.ctx, "deviceInfo", info)
+		m.emit("deviceInfo", info)
 		return &DeviceInfo{}
 	}
 
@@ -146,7 +148,7 @@ func (m *Manager) GetInfo() *DeviceInfo {
 		"Udid":       udid,
 		"Connected":  "true",
 	}
-	runtime.EventsEmit(m.ctx, "deviceInfo", info)
+	m.emit("deviceInfo", info)
 
 	return &DeviceInfo{
 		Name:    name,
@@ -212,18 +214,33 @@ func (m *Manager) GetInstalledApps(udid string) []InstalledApp {
 	return programs
 }
 
-// Helper function to Authenticate with Apple ID using ipatool
-func (m *Manager) AuthenticateAppleID(email string, password string) error {
-	m.logger("Authenticating Apple ID: "+email, "helpers.Manager.AuthenticateAppleID")
+// ErrAppleAuthRequired is returned when ipatool has no stored Apple ID session.
+var ErrAppleAuthRequired = errors.New("not signed in to the App Store; use Settings > Sign in to Apple AppStore")
 
-	ipatoolAuthCMD := m.withBundledLibEnv(exec.Command(m.tools.IPATool, "auth", "login", "--email", email, "--password", password))
-	outputBytes, err := ipatoolAuthCMD.CombinedOutput()
+// IsAppleIDAuthenticated reports whether ipatool already holds a session in its keychain.
+func (m *Manager) IsAppleIDAuthenticated() bool {
+	cmd := m.withBundledLibEnv(exec.Command(m.tools.IPATool, "auth", "info", "--non-interactive"))
+	return cmd.Run() == nil
+}
 
-	m.logger("Authentication output: "+string(outputBytes), "helpers.Manager.AuthenticateAppleID")
-	if err != nil {
-		m.logger("Authentication error: "+err.Error(), "helpers.Manager.AuthenticateAppleID")
+// OpenAppleLoginTerminal opens Terminal.app running `ipatool auth login` so the user can
+// enter their password and 2FA code interactively. ipatool stores the session in the keychain.
+func (m *Manager) OpenAppleLoginTerminal() error {
+	shellQuote := func(v string) string { return "'" + strings.ReplaceAll(v, "'", `'\''`) + "'" }
+	command := shellQuote(m.tools.IPATool) + " auth login"
+	if m.libPath != "" {
+		command = "DYLD_LIBRARY_PATH=" + shellQuote(m.libPath) + " DYLD_FALLBACK_LIBRARY_PATH=" + shellQuote(m.libPath) + " " + command
 	}
-	return err
+	appleScriptString := strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(command)
+	script := `tell application "Terminal"
+activate
+do script "` + appleScriptString + `"
+end tell`
+	m.logger("Opening Terminal for interactive Apple ID login", "helpers.Manager.OpenAppleLoginTerminal")
+	if out, err := exec.Command("osascript", "-e", script).CombinedOutput(); err != nil {
+		return fmt.Errorf("open Terminal: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // Helper function to download an IPA from the App Store using ipatool
@@ -232,14 +249,30 @@ func (m *Manager) DownloadApp(bundleID string, email string, password string, pa
 
 	downloadPath := filepath.Join(pathToTmpDir, bundleID+".ipa")
 
-	// authenticate with Apple ID before downloading
-	if err := m.AuthenticateAppleID(email, password); err != nil {
-		return fmt.Errorf("authenticate Apple ID: %w", err)
+	if !m.IsAppleIDAuthenticated() {
+		return ErrAppleAuthRequired
 	}
 
 	ipatoolCMD := m.withBundledLibEnv(exec.Command(m.tools.IPATool, "download", "--bundle-identifier", bundleID, "--output", downloadPath, "--purchase", "--verbose"))
-	outputBytes, err := ipatoolCMD.CombinedOutput()
-	m.logger("Download output: "+string(outputBytes), "helpers.Manager.DownloadApp")
+	var captured bytes.Buffer
+	var sink io.Writer = &captured
+	if stderrIsTerminal() {
+		// Show ipatool's live progress bar in the CLI instead of holding it until exit.
+		sink = io.MultiWriter(&captured, os.Stderr)
+	}
+	ipatoolCMD.Stdout = sink
+	ipatoolCMD.Stderr = sink
+	err := ipatoolCMD.Run()
+	if stderrIsTerminal() {
+		fmt.Fprintln(os.Stderr)
+	}
+	outputBytes := captured.Bytes()
+	// Progress frames are separated by carriage returns; only the last one is worth logging.
+	logged := string(outputBytes)
+	if i := strings.LastIndex(strings.TrimRight(logged, "\r\n"), "\r"); i >= 0 {
+		logged = logged[i+1:]
+	}
+	m.logger("Download output: "+logged, "helpers.Manager.DownloadApp")
 	if err != nil {
 		m.logger("Download failed: "+err.Error(), "helpers.Manager.DownloadApp")
 		return fmt.Errorf("download IPA: %w", err)
@@ -261,18 +294,33 @@ func (m *Manager) InstallApp(udid, pathToIpaFile string) error {
 	outputBytes, err := ideviceInstallCMD.CombinedOutput()
 
 	// Emit installation output to frontend
-	runtime.EventsEmit(m.ctx, "installationOutput", string(outputBytes))
+	m.emit("installationOutput", string(outputBytes))
 
 	m.logger("Installation output: "+string(outputBytes), "helpers.Manager.InstallApp")
+	if isInstallCoordinatorConflict(string(outputBytes)) {
+		m.logger("Install blocked by an existing App Store install coordinator", "helpers.Manager.InstallApp")
+		return ErrInstallCoordinatorConflict
+	}
 	if err != nil || hasInstallerError(string(outputBytes)) {
 		if err != nil {
 			m.logger("Installation failed: "+err.Error(), "helpers.Manager.InstallApp")
-			return fmt.Errorf("install IPA: %w: %s", err, strings.TrimSpace(string(outputBytes)))
+			return fmt.Errorf("install IPA: %w: %s", err, summarizeInstallerOutput(string(outputBytes)))
 		}
 		m.logger("Installation failed despite successful process exit", "helpers.Manager.InstallApp")
-		return fmt.Errorf("install IPA failed: %s", strings.TrimSpace(string(outputBytes)))
+		return fmt.Errorf("install IPA failed: %s", summarizeInstallerOutput(string(outputBytes)))
 	}
 	return nil
+}
+
+// ErrInstallCoordinatorConflict means iOS already has an App Store install or update in
+// progress for the app (IXCoordinatorScopeGlobal), which ideviceinstaller cannot take over.
+var ErrInstallCoordinatorConflict = errors.New("iOS reports an App Store install or update already in progress for this app, which blocks the install. " +
+	"To fix it, delete the app from the iPhone and run the analysis again with installation. " +
+	"If you do not want to delete it, finish or cancel the pending download in the App Store, or choose \"Analyze Installed App\"")
+
+func isInstallCoordinatorConflict(output string) bool {
+	return strings.Contains(output, "IXErrorDomain Code=46") ||
+		strings.Contains(output, "A coordinated app install already exists")
 }
 
 func hasInstallerError(output string) bool {
@@ -393,4 +441,26 @@ func (m *Manager) LoadAppList() string {
 	m.logger("Selected app list file: "+filePath, "helpers.Manager.LoadAppList")
 
 	return filePath
+}
+
+// emit forwards an event to the GUI. Outside Wails (the CLI) the context carries no
+// runtime, and Wails would abort the process, so the event is dropped.
+func (m *Manager) emit(name string, data ...any) {
+	if m.ctx == nil || m.ctx.Value("events") == nil {
+		return
+	}
+	runtime.EventsEmit(m.ctx, name, data...)
+}
+
+func stderrIsTerminal() bool {
+	info, err := os.Stderr.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
+// summarizeInstallerOutput reduces ideviceinstaller's progress chatter to its ERROR line.
+func summarizeInstallerOutput(output string) string {
+	if i := strings.LastIndex(output, "ERROR:"); i >= 0 {
+		return strings.TrimSpace(output[i:])
+	}
+	return strings.TrimSpace(output)
 }
