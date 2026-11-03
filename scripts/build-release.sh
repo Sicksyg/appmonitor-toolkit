@@ -530,6 +530,12 @@ copy_notices() {
 copy_notices "$repo_root/build/bin/AppMonitor.app/Contents/Resources/licenses"
 copy_notices "$repo_root/build/appmonitor-licenses"
 
+# Adding files to the bundle invalidates Wails' ad-hoc seal, which makes macOS
+# report the downloaded app as damaged. Re-seal it (and the CLI) ad hoc.
+codesign --force --deep --sign - "$repo_root/build/bin/AppMonitor.app"
+codesign --force --sign - "$repo_root/build/appmonitor"
+codesign --verify --deep --strict "$repo_root/build/bin/AppMonitor.app"
+
 # --package builds the release assets in build/release and does not launch the app.
 package_release() {
 	local version="${APPMONITOR_VERSION:-$(git -C "$repo_root" describe --tags --always --dirty 2>/dev/null || print dev)}"

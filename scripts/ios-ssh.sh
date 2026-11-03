@@ -6,7 +6,10 @@ set -euo pipefail
 
 LOCAL_PORT=2222
 REMOTE_PORT=22
-SSH_HOST="ios"          # matches the "Host ios" alias in ~/.ssh/config
+# The phone is reached through the iproxy USB tunnel, so no ~/.ssh/config alias
+# is required. Override the account for rootful jailbreaks (for example root).
+SSH_HOST="127.0.0.1"
+SSH_USER="${APPMONITOR_IOS_SSH_USER:-mobile}"
 PIDFILE="/tmp/.ios-ssh-iproxy.pid"
 LOGFILE="/tmp/.ios-ssh-iproxy.log"
 IPROXY="${APPMONITOR_IPROXY_PATH:-iproxy}"
@@ -57,7 +60,23 @@ if ! is_port_open; then
     is_port_open || start_iproxy
 fi
 
-SSH_OPTIONS=()
+# Ask the user to verify the host key during interactive key authorization;
+# later non-interactive connections only trust a key that was already recorded.
+HOST_KEY_POLICY="accept-new"
+if [ "${APPMONITOR_IOS_SSH_AUTHORIZE:-}" = "1" ]; then
+    HOST_KEY_POLICY="ask"
+fi
+SSH_OPTIONS=(
+    -p "$LOCAL_PORT"
+    -l "$SSH_USER"
+    -o "ConnectTimeout=10"
+    -o "StrictHostKeyChecking=$HOST_KEY_POLICY"
+)
+# Every phone appears as 127.0.0.1:2222, so keep its host key in a file owned
+# by AppMonitor instead of mixing it into the user's ~/.ssh/known_hosts.
+if [ -n "${APPMONITOR_IOS_SSH_IDENTITY_FILE:-}" ]; then
+    SSH_OPTIONS+=(-o "UserKnownHostsFile=$(dirname "$APPMONITOR_IOS_SSH_IDENTITY_FILE")/known_hosts")
+fi
 if [ -n "${APPMONITOR_IOS_SSH_CONTROL_PATH:-}" ]; then
     SSH_OPTIONS+=(-o "ControlPath=$APPMONITOR_IOS_SSH_CONTROL_PATH")
 fi

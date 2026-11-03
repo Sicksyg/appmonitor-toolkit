@@ -33,9 +33,17 @@ remove the AppMonitor public-key line from the phone's
 `~/.ssh/authorized_keys` and delete
 `~/Library/Application Support/AppMonitor/ssh/`.
 
-The helper uses the `ios` host from the user's SSH configuration. Configure
-the alias for the phone's SSH endpoint and account if it is not already
-available. Keep SSH host-key verification enabled.
+No `~/.ssh/config` entry is needed. The helper connects to `127.0.0.1:2222`
+(the `iproxy` USB tunnel) as the `mobile` user; set `APPMONITOR_IOS_SSH_USER`
+(for example to `root`) for jailbreaks that use another account. The phone's
+host key is recorded on first connection in
+`~/Library/Application Support/AppMonitor/ssh/known_hosts`, separate from your
+own `known_hosts`. If you switch to a different phone or re-jailbreak, delete
+that file to accept the new key.
+
+macOS asks once whether AppMonitor may control Terminal for the key setup;
+allow it (System Settings → Privacy & Security → Automation). If the setup
+window never appears, check that permission.
 
 ## SSH access for standalone `am_scanner` deployment
 

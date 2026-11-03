@@ -64,6 +64,7 @@ type Manager struct {
 	sshReady           chan struct{}
 	sshConnected       bool
 	sshMutex           sync.Mutex
+	sshConnectMutex    sync.Mutex
 }
 
 type Paths struct {
@@ -343,6 +344,42 @@ func (m *Manager) StartSSH(ctx context.Context) {
 
 func (m *Manager) establishSSH(ctx context.Context) {
 	defer close(m.sshReady)
+	m.connectSSH(ctx)
+}
+
+// isSSHAuthError reports probe failures that mean the key needs (re)authorizing
+// rather than a transient tunnel or device problem.
+func isSSHAuthError(err error) bool {
+	message := err.Error()
+	return strings.Contains(message, "Permission denied") ||
+		strings.Contains(message, "Host key verification failed") ||
+		strings.Contains(message, "Load key") ||
+		strings.Contains(message, "agent refused operation")
+}
+
+// probeSSHIdentityWithRetry retries transient failures such as a connection
+// reset while iproxy or the phone's sshd is still coming up after launch.
+func (m *Manager) probeSSHIdentityWithRetry(ctx context.Context) error {
+	var err error
+	for attempt := 0; attempt < 6; attempt++ {
+		probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		err = m.probeSSHIdentity(probeCtx)
+		cancel()
+		if err == nil || isSSHAuthError(err) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
+	}
+	return err
+}
+
+func (m *Manager) connectSSH(ctx context.Context) {
+	m.sshConnectMutex.Lock()
+	defer m.sshConnectMutex.Unlock()
 	m.sshControlPath = filepath.Join(os.TempDir(), fmt.Sprintf("am-ios-ssh-%d-%d.sock", os.Getuid(), os.Getpid()))
 	if err := os.Remove(m.sshControlPath); err != nil && !os.IsNotExist(err) {
 		m.logger("Unable to remove stale iOS SSH control socket: "+err.Error(), "Manager.StartSSH")
@@ -368,14 +405,9 @@ func (m *Manager) establishSSH(ctx context.Context) {
 			return
 		}
 	} else {
-		probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		err := m.probeSSHIdentity(probeCtx)
-		cancel()
+		err := m.probeSSHIdentityWithRetry(ctx)
 		if err != nil {
-			if !strings.Contains(err.Error(), "Permission denied") &&
-				!strings.Contains(err.Error(), "Host key verification failed") &&
-				!strings.Contains(err.Error(), "Load key") &&
-				!strings.Contains(err.Error(), "agent refused operation") {
+			if !isSSHAuthError(err) {
 				m.logger("Unable to check AppMonitor SSH key authentication: "+err.Error(), "Manager.StartSSH")
 				return
 			}
@@ -785,13 +817,24 @@ func (m *Manager) waitForSSH(ctx context.Context) error {
 			return fmt.Errorf("wait for persistent iOS SSH connection: %w", ctx.Err())
 		}
 	}
-	m.sshMutex.Lock()
-	connected := m.sshConnected
-	m.sshMutex.Unlock()
-	if !connected {
+	if m.isSSHConnected() {
+		return nil
+	}
+	// The startup attempt failed (for example the phone was not ready yet), so
+	// try again on demand instead of staying unavailable until the app restarts.
+	if m.sshScriptPath != "" {
+		m.connectSSH(ctx)
+	}
+	if !m.isSSHConnected() {
 		return fmt.Errorf("persistent iOS SSH connection is unavailable")
 	}
 	return nil
+}
+
+func (m *Manager) isSSHConnected() bool {
+	m.sshMutex.Lock()
+	defer m.sshMutex.Unlock()
+	return m.sshConnected
 }
 
 // ListInstalledApps retrieves metadata and icon data from am_scanner over the
