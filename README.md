@@ -71,3 +71,6 @@ ID: 101189401).
 
 This repository is licensed under Creative Commons Attribution 4.0
 International (CC BY 4.0).
+
+Third-party components (icons, fonts, bundled tools and libraries) keep their
+own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
