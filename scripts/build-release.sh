@@ -3,7 +3,7 @@
 # Build AppMonitor after staging its Homebrew-provided macOS helper tools.
 #
 # Usage:
-#   scripts/build-release.sh [--stage-only]
+#   scripts/build-release.sh [--stage-only | --package]
 #
 # The staging phase:
 #   1. Resolves ideviceinstaller, idevice_id, ideviceinfo, ipatool, ldid, and
@@ -29,6 +29,11 @@
 # writable by the current user.
 # --stage-only stops after staging, rewriting, and signing; it is useful for
 # inspecting the asset files without building or launching AppMonitor.
+# --package does a full build, then zips the app and the CLI (each with the
+# license notices) plus SHA256SUMS.txt into build/release instead of launching the
+# app. The version comes from APPMONITOR_VERSION or `git describe`.
+# A normal run also copies the license notices into the app bundle
+# (Contents/Resources/licenses) and build/appmonitor-licenses for the CLI.
 #
 # Environment:
 #   APPMONITOR_ASSET_ROOT  Override the assets directory (useful for testing).
@@ -505,4 +510,51 @@ fi
 
 wails build -clean
 go build -o build/appmonitor ./cmd
-open build/bin/AppMonitor.app
+
+# Ship the license notices with both distributables: inside the app bundle and
+# in a folder next to the CLI binary.
+copy_notices() {
+	local destination="$1"
+	local item
+	rm -rf "$destination"
+	mkdir -p "$destination"
+	for item in LICENSE THIRD_PARTY_NOTICES.md third_party; do
+		if [[ ! -e "$repo_root/$item" ]]; then
+			print -u2 "Missing notice file: $repo_root/$item"
+			exit 1
+		fi
+		cp -R "$repo_root/$item" "$destination/"
+	done
+	print "Copied license notices to $destination"
+}
+copy_notices "$repo_root/build/bin/AppMonitor.app/Contents/Resources/licenses"
+copy_notices "$repo_root/build/appmonitor-licenses"
+
+# --package builds the release assets in build/release and does not launch the app.
+package_release() {
+	local version="${APPMONITOR_VERSION:-$(git -C "$repo_root" describe --tags --always --dirty 2>/dev/null || print dev)}"
+	local suffix="macos-$asset_arch"
+	local release_dir="$repo_root/build/release"
+	local cli_name="appmonitor-cli-$version-$suffix"
+	local cli_stage="$release_dir/$cli_name"
+
+	rm -rf "$release_dir"
+	mkdir -p "$cli_stage"
+	cp "$repo_root/build/appmonitor" "$cli_stage/appmonitor"
+	cp -R "$repo_root/build/appmonitor-licenses" "$cli_stage/licenses"
+
+	ditto -c -k --sequesterRsrc --keepParent \
+		"$repo_root/build/bin/AppMonitor.app" "$release_dir/AppMonitor-$version-$suffix.zip"
+	ditto -c -k --sequesterRsrc --keepParent "$cli_stage" "$release_dir/$cli_name.zip"
+	rm -rf "$cli_stage"
+
+	(cd "$release_dir" && shasum -a 256 *.zip > SHA256SUMS.txt)
+	print "Release assets in $release_dir:"
+	ls -1 "$release_dir"
+}
+
+if [[ "${1-}" == "--package" ]]; then
+	package_release
+else
+	open build/bin/AppMonitor.app
+fi

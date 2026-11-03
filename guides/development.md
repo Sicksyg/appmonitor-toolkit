@@ -64,6 +64,21 @@ Silicon or `amd64` on Intel Macs); it does not create universal binaries.
 Staging requires Xcode command-line tools, including `otool`,
 `install_name_tool`, `lipo`, and `codesign`.
 
+Every staging run also writes `third_party/bundled-components.txt` (exact
+Homebrew versions and licenses). In normal build mode the script copies
+`LICENSE`, `THIRD_PARTY_NOTICES.md` and `third_party/` into
+`build/bin/AppMonitor.app/Contents/Resources/licenses` and into
+`build/appmonitor-licenses` (next to the CLI binary). To produce
+the release downloads in one step, run:
+
+```sh
+APPMONITOR_VERSION=v0.1.0 scripts/build-release.sh --package
+```
+
+This builds everything, then writes the zipped app, the zipped CLI (binary plus
+`licenses/`) and `SHA256SUMS.txt` to `build/release/`, without launching the app.
+The version defaults to `git describe`. Don't re-sign the app after packaging.
+
 The release script clears generated AppMonitor reports and cached `bin`,
 `frida`, and `lib` folders under Application Support in normal build mode.
 `APPMONITOR_ASSET_ROOT` can select a temporary asset directory for validating
